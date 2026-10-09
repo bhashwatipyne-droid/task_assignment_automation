@@ -375,14 +375,54 @@ async function loadUsers(force = false) {
 
 const TEAM_DEPARTMENT = {
     content: "content",
-    design: "design"
+    design: "design",
+    animation: "animation"
 };
 
 
-// Maps "Harshal" + team -> one PMT user, or null with a reason.
+const normName = (v) => (v || "").trim().toLowerCase().replace(/\s+/g, " ");
+
+const firstName = (v) => normName(v).split(" ")[0];
+
+const isTestAccount = (u) =>
+    /\btest(ing)?\b/i.test(`${u.name} ${u.username}`);
+
+const assignable = (u) =>
+    !NON_ASSIGNEE_ROLES.has((u.role || "").toLowerCase());
+
+
+// Every spelling a tasklist may use for a PMT user, for the parser's
+// assignee list: first name (real accounts only, so "Ratnesh" is never
+// ambiguous), full name and username (test accounts included, so
+// "Bhashwati Testing" is recognised as one person).
+function assigneeNames(userList = users) {
+
+    const out = new Set();
+
+    userList.filter(assignable).forEach(u => {
+
+        if (u.name) out.add(u.name.trim());
+        if (u.username) out.add(u.username.trim());
+
+        if (!isTestAccount(u) && u.name) {
+            out.add(u.name.trim().split(/\s+/)[0]);
+        }
+
+    });
+
+    return [...out];
+
+}
+
+
+// Maps "Harshal" / "Bhashwati Testing" + team -> one PMT user, or null
+// with a reason. A full name or username is exact and wins; a bare first
+// name prefers real accounts and falls back to a test account only when
+// no real one shares the name.
 function resolveAssignee(name, team, userList = users) {
 
-    const first = (name || "").trim().toLowerCase().split(/\s+/)[0];
+    const wantedName = normName(name);
+    const first = firstName(name);
 
     if (!first) {
         return { user: null, reason: "No assignee name" };
@@ -390,20 +430,28 @@ function resolveAssignee(name, team, userList = users) {
 
     const wanted = TEAM_DEPARTMENT[team] || null;
 
-    const isTest = (u) =>
-        /\btest(ing)?\b/i.test(`${u.name} ${u.username}`);
+    const candidates = userList.filter(assignable);
 
-    const sameFirst = userList.filter(u =>
-        !isTest(u) &&
-        !NON_ASSIGNEE_ROLES.has((u.role || "").toLowerCase()) &&
-        (u.name || "").trim().toLowerCase().split(/\s+/)[0] === first
+    // ---- 1. exact full name / username ----
+    let exact = candidates.filter(u =>
+        normName(u.name) === wantedName || normName(u.username) === wantedName
     );
 
-    let pool = sameFirst;
+    // ---- 2. first name only ----
+    let pool = exact;
 
-    if (wanted) {
+    if (!pool.length && !wantedName.includes(" ")) {
 
-        const inTeam = sameFirst.filter(u =>
+        const sameFirst = candidates.filter(u => firstName(u.name) === first);
+        const real = sameFirst.filter(u => !isTestAccount(u));
+
+        pool = real.length ? real : sameFirst;
+
+    }
+
+    if (wanted && pool.length) {
+
+        const inTeam = pool.filter(u =>
             (u.department || "").toLowerCase() === wanted
         );
 
@@ -413,11 +461,11 @@ function resolveAssignee(name, team, userList = users) {
 
         // The name exists, but only in another department. Guessing across
         // teams would hand the task to the wrong person: a human decides.
-        else if (sameFirst.length) {
+        else {
             return {
                 user: null,
                 reason: `"${name}" is not in the ${cap(team)} team in PMT (found: ` +
-                    sameFirst.map(u => `${u.name}, ${u.department}`).join(" / ") + ")"
+                    pool.map(u => `${u.name}, ${u.department}`).join(" / ") + ")"
             };
         }
 
@@ -1207,6 +1255,8 @@ module.exports = {
     saveTasklist,
     buildDocuments,
     resolveAssignee,
+    assigneeNames,
+    loadUsers,
     resolveAssigner,
     validateRefs,
     loadReferences,

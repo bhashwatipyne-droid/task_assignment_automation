@@ -23,6 +23,7 @@ const {
 
 // Direct MongoDB storage (replaces the n8n webhook)
 const store = require("./mongoStore");
+const TEAM_ROSTER = require("./teamRoster.json");
 
 // Only used to log which lexicon build made each match
 const matcher = require("./tasklistMatcher");
@@ -644,10 +645,18 @@ async function startWhatsApp() {
 
                 if (isTaskList) {
 
+                    // env list + live PMT users + bundled roster, so every
+                    // team member (test accounts included) is recognised
+                    const knownAssignees = [...new Set([
+                        ...ASSIGNEES,
+                        ...store.assigneeNames(await store.loadUsers()),
+                        ...store.assigneeNames(TEAM_ROSTER)
+                    ])];
+
                     parsedTaskList =
                         parseTaskList(
                             text,
-                            ASSIGNEES
+                            knownAssignees
                         );
 
                     console.log("========================================");

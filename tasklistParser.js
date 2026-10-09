@@ -80,7 +80,7 @@ const PRIORITY_RE =
     /[\s\-–—(\[]*\b(high|medium|low|urgent)\s*priority\b[\s)\]]*$/i;
 
 const HEADER_RE =
-    /^(content|design)\s+(team(\s+task\s*list)?|task\s*list)\s*:?$/i;
+    /^(content|design|animation)\s+(team(\s+task\s*list)?|task\s*list)\s*:?$/i;
 
 // "@all Design team tasklist" -> "Design team tasklist"
 function stripMentions(text) {
