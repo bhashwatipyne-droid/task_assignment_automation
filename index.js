@@ -10,6 +10,7 @@ const {
 const P = require("pino");
 const express = require("express");
 const qrcode = require("qrcode-terminal");
+const { createQrPage } = require("./qrPage");
 
 require("dotenv").config();
 
@@ -159,7 +160,15 @@ function detectKeywords(text) {
 
 const app = express();
 
+// Password-protected PNG page for linking WhatsApp (on only when QR_PAGE_TOKEN is set).
+const qrPage = createQrPage();
+app.set("trust proxy", 1); // Render sits behind one proxy: real client IP for the /qr throttle
+
 app.use(express.json());
+
+
+// Link-WhatsApp QR image (HTTP Basic auth, password = QR_PAGE_TOKEN)
+app.get("/qr", (req, res, next) => qrPage.handler(req, res).catch(next));
 
 
 // Health check
@@ -250,7 +259,13 @@ async function startWhatsApp() {
             // QR CODE
             // ------------------------------------------------
 
-            if (qr) {
+            if (qr && qrPage.enabled) {
+
+                // Shown as an image on /qr; never printed to the logs.
+                qrPage.setQr(qr);
+                console.log("QR code ready: open /qr on this service to scan it.");
+
+            } else if (qr) {
 
                 console.log("");
                 console.log("========================================");
@@ -277,6 +292,8 @@ async function startWhatsApp() {
             // ------------------------------------------------
 
             if (connection === "open") {
+
+                qrPage.markLinked();
 
                 console.log("");
                 console.log("========================================");
