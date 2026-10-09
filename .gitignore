@@ -5,3 +5,6 @@
 auth_info/
 auth_info_baileys/
 node_modules/
+
+# Local retry queue for writes that failed (see mongoStore.js)
+outbox/
