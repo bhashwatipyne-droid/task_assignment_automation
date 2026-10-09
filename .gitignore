@@ -1,0 +1,7 @@
+# WhatsApp credentials and session data
+.env
+.env.*
+!.env.example
+auth_info/
+auth_info_baileys/
+node_modules/
