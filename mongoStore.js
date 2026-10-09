@@ -1249,8 +1249,14 @@ function _useDatabaseForTest(fakeDb, userList) {
 }
 
 
+function getDb() {
+    return db;
+}
+
+
 module.exports = {
     init,
+    getDb,
     close,
     saveTasklist,
     buildDocuments,

@@ -54,6 +54,20 @@ class Collection {
         return { upsertedCount: upserted, modifiedCount: upserted ? 0 : 1 };
     }
 
+    async deleteOne(filter) {
+        this._guard();
+        const i = this.docs.findIndex(d => matches(d, filter));
+        if (i >= 0) this.docs.splice(i, 1);
+        return { deletedCount: i >= 0 ? 1 : 0 };
+    }
+
+    async deleteMany(filter) {
+        this._guard();
+        const before = this.docs.length;
+        this.docs = this.docs.filter(d => !matches(d, filter));
+        return { deletedCount: before - this.docs.length };
+    }
+
     async bulkWrite(ops) {
         this._guard();
         let upsertedCount = 0;

@@ -23,6 +23,7 @@ const {
 
 // Direct MongoDB storage (replaces the n8n webhook)
 const store = require("./mongoStore");
+const { useMongoAuthState } = require("./waAuthStore");
 const TEAM_ROSTER = require("./teamRoster.json");
 
 // Only used to log which lexicon build made each match
@@ -201,13 +202,37 @@ async function startWhatsApp() {
     // AUTHENTICATION
     // ========================================================
 
-    const {
-        state,
-        saveCreds
-    } =
-        await useMultiFileAuthState(
-            "./auth_info"
+    // The login lives in MongoDB (Render wipes the disk on every deploy).
+    // WA_AUTH_STORE=file forces the old ./auth_info folder.
+    let state, saveCreds, clearAuth = async () => {};
+
+    const authDb = store.getDb();
+
+    if (authDb && process.env.WA_AUTH_STORE !== "file") {
+
+        const mongoAuth = await useMongoAuthState(
+            authDb,
+            process.env.WA_SESSION_ID || "default"
         );
+
+        ({ state, saveCreds } = mongoAuth);
+        clearAuth = mongoAuth.clear;
+
+        console.log(
+            mongoAuth.hasSession
+                ? "WhatsApp login restored from MongoDB."
+                : "No saved WhatsApp login in MongoDB: scan the QR once."
+        );
+
+    }
+
+    else {
+
+        console.log("WARNING: WhatsApp login is stored in ./auth_info (lost on every Render deploy).");
+
+        ({ state, saveCreds } = await useMultiFileAuthState("./auth_info"));
+
+    }
 
 
     // ========================================================
@@ -392,8 +417,11 @@ async function startWhatsApp() {
 
                     console.log("");
                     console.log("WhatsApp logged out.");
-                    console.log("Delete the auth_info folder");
-                    console.log("and restart to scan a new QR.");
+                    console.log("Clearing the saved login; a new QR will be shown.");
+
+                    clearAuth()
+                        .catch(() => {})
+                        .finally(() => setTimeout(() => startWhatsApp(), 3000));
 
                 }
 
