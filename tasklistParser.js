@@ -276,7 +276,10 @@ function parseTaskLine(rawLine) {
                 confidence: m.confidence,
                 client_source: m.client_source,
                 db_deliverable: m.db_match.deliverable_in_db,
+                db_deliverable_id: m.db_match.deliverable_id || null,
+                deliverable_alternatives: m.db_match.deliverable_alternatives || [],
                 alternatives: m.db_match.alternatives,
+                scores: m.scores || null,
 
                 needs_review: m.needs_review,
                 review_reasons: m.review_reasons,

@@ -161,6 +161,34 @@ function isReady() {
 }
 
 
+// When the lexicon was built and what is in it (logged with every match so a
+// stale lexicon can be told apart from a bad match).
+function lexiconInfo() {
+
+    if (!LEX) return { built_at: null, stats: null };
+
+    return { built_at: LEX.built_at || null, stats: LEX.stats || null };
+
+}
+
+
+// The numbers behind one ranked candidate, rounded for storage.
+function scoreOf(row) {
+
+    if (!row) return null;
+
+    const r = (n) => (typeof n === "number" ? Number(n.toFixed(3)) : null);
+
+    return {
+        raw: r(row.raw),
+        mass: r(row.mass),
+        recall: r(row.recall),
+        precision: r(row.precision)
+    };
+
+}
+
+
 // ------------------------------------------------------------
 // SCORING
 // ------------------------------------------------------------
@@ -446,6 +474,8 @@ function resolveLine(rawLine) {
         slot: null,
         priority: null,
         confidence: { client: 0, project: 0, deliverable: 0 },
+        // raw scoring detail behind `confidence` (observability only)
+        scores: { project: null, deliverable: null },
         db_match: {
             project_found: false,
             deliverable_found: false,
@@ -887,14 +917,32 @@ function resolveLine(rawLine) {
             result.confidence.deliverable = Number(cands[0].raw.toFixed(2));
             result.db_match.deliverable_found = true;
             result.db_match.deliverable_in_db = cands[0].entity.name;
+            result.db_match.deliverable_id = cands[0].entity.id;
 
         }
+
+        // Observability only (does not change any decision above): the
+        // runners-up and the raw scores, so a close call can be spotted and
+        // logged by the caller.
+        result.db_match.deliverable_alternatives =
+            cands
+                .filter(r => r.raw > 0.3)
+                .slice(0, 3)
+                .map(r => ({
+                    id: r.entity.id,
+                    deliverable: r.entity.name,
+                    score: Number(r.raw.toFixed(2))
+                }));
+
+        result.scores.deliverable = scoreOf(cands[0]);
 
     }
 
 
     // ---- project fields -------------------------------------
     if (chosenProject) {
+
+        result.scores.project = scoreOf(chosenProject);
 
         result.project_name = chosenProject.entity.name;
         result.project_id = chosenProject.entity.id;
@@ -1015,5 +1063,6 @@ function finish(result, reason) {
 module.exports = {
     loadLexicon,
     isReady,
+    lexiconInfo,
     resolveLine
 };

@@ -23,6 +23,30 @@ const {
 // Direct MongoDB storage (replaces the n8n webhook)
 const store = require("./mongoStore");
 
+// Only used to log which lexicon build made each match
+const matcher = require("./tasklistMatcher");
+
+
+// When WhatsApp says the message was sent (Baileys gives seconds, sometimes
+// as a Long). A message delivered late, or again after a reconnect, must keep
+// its real day, not the day it happened to arrive.
+function messageTime(message) {
+
+    const raw = message.messageTimestamp;
+
+    const seconds =
+        raw && typeof raw.toNumber === "function"
+            ? raw.toNumber()
+            : Number(raw);
+
+    if (Number.isFinite(seconds) && seconds > 0) {
+        return new Date(seconds * 1000).toISOString();
+    }
+
+    return new Date().toISOString();
+
+}
+
 
 // ============================================================
 // CONFIGURATION
@@ -676,8 +700,11 @@ async function startWhatsApp() {
 
                     parsed_tasklist: parsedTaskList,
 
+                    lexicon_built_at:
+                        matcher.lexiconInfo().built_at,
+
                     timestamp:
-                        new Date().toISOString()
+                        messageTime(message)
 
                 };
 
