@@ -77,7 +77,7 @@ function matcherReady() {
 const BULLET_RE = /^\s*(?:[-•·▪●–—]|\*(?=\s)|\d+[.)])\s+/;
 
 const PRIORITY_RE =
-    /[\s\-–—(\[]*\b(high|medium|low|urgent)\s*priority\b[\s)\]]*$/i;
+    /[\s\-–—(\[]*\b(high|medium|low|urgent)\s*priority\b[\s)\]]*/gi;
 
 const HEADER_RE =
     /^(content|design|animation)\s+(team(\s+task\s*list)?|task\s*list)\s*:?$/i;
@@ -300,17 +300,12 @@ function parseTaskLine(rawLine) {
     // Priority (removed from the text)
     let priority = null;
 
-    const priorityMatch = line.match(PRIORITY_RE);
+    const priorityMatch = /priority/i.test(line) && line.match(PRIORITY_RE);
 
+    // priority words are dropped, the worksheet has no priority
     if (priorityMatch) {
 
-        const word = priorityMatch[1].toLowerCase();
-
-        priority =
-            word.charAt(0).toUpperCase() +
-            word.slice(1);
-
-        line = line.replace(PRIORITY_RE, "").trim();
+        line = line.replace(PRIORITY_RE, " ").trim();
 
     }
 

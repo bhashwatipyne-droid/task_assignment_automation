@@ -95,7 +95,8 @@ test("a certain line is queued for the assignee with live-checked ids", async ()
     assert.equal(item.project_name, "IPru Pharma ETF Campaign");
     assert.ok(item.project_id);
     assert.ok(item.deliverable_id, "the matched DB deliverable id is kept");
-    assert.equal(item.priority, "High");
+    // priority words are dropped (the worksheet has no priority)
+    assert.ok(!item.priority || item.priority === "Normal");
     assert.equal(item.work_date, "2026-10-09");
     assert.equal(item.due_at, "2026-10-09T18:00:00+05:30");
     assert.equal(item.assigned_by_name, "Content team manager");

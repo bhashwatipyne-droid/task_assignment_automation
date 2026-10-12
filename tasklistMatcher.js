@@ -313,7 +313,11 @@ function rank(qToks, kind, allowedClients) {
 
     }
 
-    out.sort((a, b) => b.score - a.score);
+    // a candidate with too little evidence behind it ("ICICI ETF" for a text that only
+    // says "ETF") must not outrank one that is actually supported
+    const supported = r => (r.mass >= MIN_MASS ? 1 : 0);
+
+    out.sort((a, b) => supported(b) - supported(a) || b.score - a.score);
 
     // one row per project / deliverable id
     const seen = new Set();
@@ -378,8 +382,18 @@ const strongDeliverable = (r) =>
 
 const BULLET_RE = /^\s*(?:[-•·▪●–—]|\*(?=\s)|\d+[.)])\s+/;
 
+// Priority words ("High Priority", "urgent priority") do not exist in the
+// worksheet, so they are removed from the line wherever they appear and never stored.
 const PRIORITY_RE =
-    /[\s\-–—(\[]*\b(high|medium|low|urgent)\s*priority\b[\s)\]]*$/i;
+    /[\s\-–—(\[]*\b(high|medium|low|urgent)\s*priority\b[\s)\]]*/gi;
+
+// Deliverable types that contain an action word ("Campaign ideation"): the whole
+// phrase is the deliverable, so the action-word step must not cut it up.
+const TYPE_PHRASES = [
+    "campaign ideation", "campaign peer analysis", "campaign quantitative analysis",
+    "fund guide updation", "factsheet updation", "data updation"
+];
+const TYPE_RE = new RegExp("\\b(" + TYPE_PHRASES.map(t => t.replace(/ /g, "\\s+")).join("|") + ")\\b", "gi");
 
 const SLOT_RE = /[\s\-–—]*\b(first|second)\s+half\b/i;
 
@@ -490,13 +504,7 @@ function resolveLine(rawLine) {
 
 
     // ---- priority ------------------------------------------
-    const pm = text.match(PRIORITY_RE);
-
-    if (pm) {
-        const w = pm[1].toLowerCase();
-        result.priority = w.charAt(0).toUpperCase() + w.slice(1);
-        text = text.replace(PRIORITY_RE, "");
-    }
+    text = text.replace(PRIORITY_RE, " - ");
 
     // ---- notes in brackets ---------------------------------
     const notes = [];
@@ -525,12 +533,21 @@ function resolveLine(rawLine) {
     // ---- action words (changes, review, ideation ...) -------
     const actions = [];
 
+    const keep = [];
+
+    text = text.replace(TYPE_RE, (m) => {
+        keep.push(m);
+        return "\uE000" + (keep.length - 1) + "\uE001";
+    });
+
     text = text.replace(ACTION_RE, (m) => {
         actions.push(m.charAt(0).toUpperCase() + m.slice(1).toLowerCase());
         return " ";
     });
 
     if (actions.length) result.action = actions.join(" + ");
+
+    text = text.replace(/\uE000(\d+)\uE001/g, (_, i) => keep[Number(i)]);
 
     text = tidy(text);
 

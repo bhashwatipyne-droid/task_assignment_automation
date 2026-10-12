@@ -40,8 +40,30 @@ test("commas inside brackets, numbers or the project name are not split", () => 
     assert.strictEqual(parse(["- ICICI Prudential, Bajaj Brochures"]).length, 1);
 });
 
-test("text after the comma part (priority) is kept on every entry", () => {
+test("a priority word after the comma part is dropped from every entry", () => {
     const tasks = parse(["- TFP Premium - 1 IG, 1 Minimalist - High Priority"]);
     assert.strictEqual(tasks.length, 2);
-    assert.ok(tasks.every(t => t.priority));
+    assert.deepStrictEqual(tasks.map(t => t.deliverable_name), ["1 IG", "1 Minimalist"]);
+    assert.ok(tasks.every(t => !t.priority));
+});
+
+test("Ipru Power ETF - Campaign ideation: project, with 'Campaign ideation' as the deliverable", () => {
+    const [t] = parse(["- Ipru Power ETF - Campaign ideation"]);
+    assert.match(t.client_name, /ICICI Prudential Mutual Fund/);
+    assert.strictEqual(t.project_name, "IPru Power ETF Campaign");
+    assert.match(t.deliverable_name, /^Campaign ideation$/i);
+    assert.strictEqual(t.needs_review, false);
+});
+
+test("priority words are dropped everywhere and never stored", () => {
+    for (const line of [
+        "- TFP Premium - 1 IG - High Priority",
+        "- TFP Premium - High Priority - 1 IG",
+        "- TFP Premium - 1 IG (urgent priority)"
+    ]) {
+        const [t] = parse([line]);
+        assert.ok(!t.priority, line);
+        assert.ok(!/priority/i.test(t.deliverable_name || ""), line);
+        assert.strictEqual(t.deliverable_name, "1 IG", line);
+    }
 });
