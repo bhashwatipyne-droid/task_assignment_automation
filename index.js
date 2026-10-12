@@ -444,6 +444,9 @@ async function startWhatsApp() {
 
             // Only new messages
             if (type !== "notify") {
+                console.log(
+                    `Skipped upsert batch of type "${type}" (${messages.length} message(s)).`
+                );
                 return;
             }
 
@@ -476,7 +479,11 @@ async function startWhatsApp() {
 
                 if (!isGroup) {
 
-                    console.log("Private chat ignored.");
+                    console.log(
+                        `Private chat ignored. jid=${remoteJid} ` +
+                        `fromMe=${message.key.fromMe === true} ` +
+                        `alt=${message.key.remoteJidAlt || "-"}`
+                    );
                     continue;
 
                 }
