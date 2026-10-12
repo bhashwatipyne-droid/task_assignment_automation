@@ -17,6 +17,8 @@ function matches(doc, filter) {
                 throw new Error("fakeDb: unsupported operator " + op);
             });
         }
+        // like MongoDB: matching a scalar against an array field means "contains"
+        if (Array.isArray(v)) return v.includes(cond);
         return v === cond;
     });
 }
@@ -51,6 +53,7 @@ class Collection {
         }
         Object.assign(doc, structuredClone(update.$set || {}));
         Object.entries(update.$inc || {}).forEach(([k, n]) => { doc[k] = (doc[k] || 0) + n; });
+        Object.entries(update.$push || {}).forEach(([k, v]) => { doc[k] = [...(doc[k] || []), structuredClone(v)]; });
         return { upsertedCount: upserted, modifiedCount: upserted ? 0 : 1 };
     }
 

@@ -4,7 +4,8 @@ const {
     default: makeWASocket,
     useMultiFileAuthState,
     DisconnectReason,
-    Browsers
+    Browsers,
+    WAMessageStubType
 } = require("@whiskeysockets/baileys");
 
 const P = require("pino");
@@ -435,21 +436,11 @@ async function startWhatsApp() {
     // RECEIVE MESSAGES
     // ========================================================
 
-    sock.ev.on(
-        "messages.upsert",
-        async ({
-            messages,
-            type
-        }) => {
-
-            // Only new messages
-            if (type !== "notify") {
-                console.log(
-                    `Skipped upsert batch of type "${type}" (${messages.length} message(s)).`
-                );
-                return;
-            }
-
+    // Handles a batch of messages. Used for new messages and, with
+    // `overrides`, for the new text of an edited message.
+    //   overrides.messageId  store the message under this id
+    //   overrides.workDate   keep the day of the message being replaced
+    const processMessages = async (messages, overrides = {}) => {
 
             for (const message of messages) {
 
@@ -728,7 +719,7 @@ async function startWhatsApp() {
 
                 const payload = {
 
-                    message_id: message.key.id,
+                    message_id: overrides.messageId || message.key.id,
 
                     chat_id: remoteJid,
 
@@ -765,7 +756,10 @@ async function startWhatsApp() {
                         matcher.lexiconInfo().built_at,
 
                     timestamp:
-                        messageTime(message)
+                        messageTime(message),
+
+                    work_date_override:
+                        overrides.workDate || null
 
                 };
 
@@ -880,6 +874,114 @@ async function startWhatsApp() {
                         );
 
                     }
+
+                }
+
+            }
+
+    };
+
+
+    sock.ev.on(
+        "messages.upsert",
+        async ({
+            messages,
+            type
+        }) => {
+
+            // Only new messages
+            if (type !== "notify") {
+                console.log(
+                    `Skipped upsert batch of type "${type}" (${messages.length} message(s)).`
+                );
+                return;
+            }
+
+            await processMessages(messages);
+
+        }
+    );
+
+
+    // ========================================================
+    // MESSAGE DELETED OR EDITED IN WHATSAPP
+    // ========================================================
+    //
+    // Baileys reports both through messages.update, keyed by the id of the
+    // ORIGINAL message (not the id of the delete / edit notice).
+    //   delete: update.messageStubType === REVOKE
+    //   edit:   update.message.editedMessage.message holds the new content
+    //
+    // Delete: tasks nobody has acted on are withdrawn (hidden in PMT);
+    //         accepted / declined ones stay (see mongoStore.withdrawMessage).
+    // Edit:   the old message is withdrawn, then the new text is saved like
+    //         a fresh message under "<id>~e<time>", on the original work day.
+    //         Unchanged lines come back, removed lines stay withdrawn.
+
+    sock.ev.on(
+        "messages.update",
+        async (updates) => {
+
+            for (const entry of updates) {
+
+                try {
+
+                    const key = entry.key || {};
+                    const change = entry.update || {};
+
+                    // delivery / read receipts and everything else
+                    if (!key.id || !(key.remoteJid || "").endsWith("@g.us")) {
+                        continue;
+                    }
+
+                    if (change.messageStubType === WAMessageStubType.REVOKE) {
+
+                        console.log(`WhatsApp message ${key.id} was deleted.`);
+
+                        await store.withdrawMessage(
+                            key.id,
+                            "message deleted in WhatsApp"
+                        );
+
+                        continue;
+
+                    }
+
+                    const edited = change.message?.editedMessage?.message;
+
+                    if (edited) {
+
+                        console.log(`WhatsApp message ${key.id} was edited.`);
+
+                        const workDate = await store.workDateOf(key.id);
+
+                        await store.withdrawMessage(
+                            key.id,
+                            "message edited in WhatsApp"
+                        );
+
+                        await processMessages(
+                            [{
+                                key: {
+                                    ...key,
+                                    id: `${key.id}~e${change.messageTimestamp || Date.now()}`
+                                },
+                                message: edited,
+                                messageTimestamp: change.messageTimestamp
+                            }],
+                            { workDate }
+                        );
+
+                    }
+
+                }
+
+                catch (error) {
+
+                    console.error(
+                        "Could not handle a deleted / edited message:",
+                        error.message
+                    );
 
                 }
 

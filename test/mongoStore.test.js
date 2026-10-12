@@ -372,3 +372,139 @@ Vanshika
     assert.equal(unknown.decision, "needs_review");
     assert.deepEqual(unknown.matched, { client_id: null, project_id: null, deliverable_id: null });
 });
+
+
+// ---------------------------------------------------------------
+// wrong team header, deleted and edited messages
+// ---------------------------------------------------------------
+
+const LINE = "ICICI Prudential Pharma - From Lab to Life (Review & Changes) - High Priority";
+
+function captureLog(fn) {
+    const lines = [];
+    const original = console.log;
+    console.log = (...args) => lines.push(args.join(" "));
+    return fn().then(
+        value => { console.log = original; return { value, lines }; },
+        error => { console.log = original; throw error; }
+    );
+}
+
+test("a Design person under a Content header is held for review and a warning is logged", async () => {
+    const db = liveDb();
+    const { value: out, lines } = await captureLog(
+        () => store.persist(payloadFor(`Content Team\nAniket\n- ${LINE}`))
+    );
+
+    const item = db.all("tasklist_items")[0];
+    assert.equal(item.team, "content");
+    assert.equal(item.status, "needs_review");
+    assert.equal(item.assignee_user_id, null);
+    assert.equal(item.team_mismatch, true);
+    assert.ok(lines.some(l => /team mismatch/i.test(l) && /Aniket/.test(l) && /Design/.test(l)), "warning logged");
+    assert.equal(out.tasks_inserted, 1);
+});
+
+test("the Content person under a Design header is flagged the same way", async () => {
+    const db = liveDb();
+    const { lines } = await captureLog(
+        () => store.persist(payloadFor(`Design Team\nHarshal\n- ${LINE}`))
+    );
+    assert.equal(db.all("tasklist_items")[0].team_mismatch, true);
+    assert.ok(lines.some(l => /team mismatch/i.test(l) && /Harshal/.test(l)));
+});
+
+test("fixing the header and sending again moves the stuck task to the right team", async () => {
+    const db = liveDb();
+    await store.persist(payloadFor(`Content Team\nAniket\n- ${LINE}`));
+    const again = await store.persist(payloadFor(`Design Team\nAniket\n- ${LINE}`));
+
+    const items = db.all("tasklist_items");
+    assert.equal(items.length, 1, "still one task, not two");
+    assert.equal(again.tasks_inserted, 0);
+    assert.equal(again.tasks_updated, 1);
+    assert.equal(items[0].team, "design");
+    assert.equal(items[0].assignee_user_id, "member-an");
+    assert.equal(items[0].team_mismatch, false);
+    assert.equal(items[0].history.at(-1).action, "re-teamed");
+});
+
+test("an accepted task is never re-teamed by a later message", async () => {
+    const db = liveDb();
+    await store.persist(payloadFor(`Content Team\nAniket\n- ${LINE}`));
+    Object.assign(db.all("tasklist_items")[0], { status: "accepted", work_item_id: "wi-9" });
+
+    const again = await store.persist(payloadFor(`Design Team\nAniket\n- ${LINE}`));
+
+    assert.equal(again.tasks_updated, 0);
+    assert.equal(again.tasks_already_stored, 1);
+    assert.equal(db.all("tasklist_items")[0].team, "content");
+    assert.equal(db.all("tasklist_items")[0].status, "accepted");
+});
+
+test("deleting a message withdraws waiting tasks but never accepted ones", async () => {
+    const db = liveDb();
+    const payload = payloadFor(`Content Team\nHarshal\n- ${LINE}\n- Second line for Harshal`);
+    await store.persist(payload);
+    const [a, b] = db.all("tasklist_items");
+    a.status = "accepted"; a.work_item_id = "wi-1";
+
+    const out = await store.withdrawMessage(payload.message_id);
+
+    assert.equal(out.withdrawn, 1);
+    assert.equal(out.kept_in_use, 1);
+    assert.equal(a.status, "accepted");
+    assert.equal(b.status, "withdrawn");
+    assert.equal(b.history.at(-1).action, "withdrawn");
+    assert.ok(db.all("whatsapp_tasklists")[0].withdrawn_at);
+});
+
+test("deleting the older of two identical messages keeps the task the newer one asserts", async () => {
+    const db = liveDb();
+    const first = payloadFor(GOOD);
+    const second = payloadFor(GOOD);
+    await store.persist(first);
+    await store.persist(second);
+
+    const out = await store.withdrawMessage(first.message_id);
+
+    assert.equal(out.withdrawn, 0);
+    assert.equal(out.kept_other_message, 1);
+    assert.notEqual(db.all("tasklist_items")[0].status, "withdrawn");
+});
+
+test("delete, then send the same message again: the task comes back, once", async () => {
+    const db = liveDb();
+    const first = payloadFor(GOOD);
+    await store.persist(first);
+    await store.withdrawMessage(first.message_id);
+    assert.equal(db.all("tasklist_items")[0].status, "withdrawn");
+
+    const again = await store.persist(payloadFor(GOOD));
+
+    assert.equal(db.all("tasklist_items").length, 1);
+    assert.equal(again.tasks_updated, 1);
+    assert.notEqual(db.all("tasklist_items")[0].status, "withdrawn");
+    assert.equal(db.all("tasklist_items")[0].history.at(-1).action, "restored");
+});
+
+test("an edit: removed lines are withdrawn, kept lines restored, new lines added", async () => {
+    const db = liveDb();
+    const original = payloadFor(`Content Team\nHarshal\n- ${LINE}\n- Old second line`);
+    await store.persist(original);
+
+    await store.withdrawMessage(original.message_id, "message edited in WhatsApp");
+    const edited = payloadFor(`Content Team\nHarshal\n- ${LINE}\n- New second line`, {
+        message_id: original.message_id + "~edit1",
+        work_date_override: await store.workDateOf(original.message_id)
+    });
+    const out = await store.persist(edited);
+
+    const byLine = Object.fromEntries(db.all("tasklist_items").map(i => [i.raw_line.replace(/^\s*-\s*/, ""), i.status]));
+    assert.equal(db.all("tasklist_items").length, 3);
+    assert.notEqual(byLine[LINE], "withdrawn", "unchanged line is live again");
+    assert.equal(byLine["Old second line"], "withdrawn");
+    assert.notEqual(byLine["New second line"], "withdrawn");
+    assert.equal(out.tasks_inserted, 1);
+    assert.equal(out.tasks_updated, 1);
+});

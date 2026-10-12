@@ -74,6 +74,8 @@ const DB_NAME = process.env.MONGODB_DB || "pmt";
 
 const TASKLISTS = "whatsapp_tasklists";
 const ITEMS = "tasklist_items";
+// Tasks nobody has acted on yet. Only these can be withdrawn or re-teamed.
+const WAITING_STATUSES = ["needs_review", "pending"];
 const MESSAGES = "whatsapp_messages";
 const TASKS = "tasks";
 const LOGS = "nlp_match_logs";
@@ -464,6 +466,8 @@ function resolveAssignee(name, team, userList = users) {
         else {
             return {
                 user: null,
+                team_mismatch: true,
+                found_departments: Array.from(new Set(pool.map(u => u.department).filter(Boolean))),
                 reason: `"${name}" is not in the ${cap(team)} team in PMT (found: ` +
                     pool.map(u => `${u.name}, ${u.department}`).join(" / ") + ")"
             };
@@ -687,7 +691,8 @@ function buildDocuments(payload, userList = users, refs = null) {
 
     const received = payload.timestamp ? new Date(payload.timestamp) : new Date();
 
-    const workDate = istDate(received);
+    // an edited message keeps the day of the message it replaces
+    const workDate = payload.work_date_override || istDate(received);
 
     const stamp = nowIso();
 
@@ -770,9 +775,23 @@ function buildDocuments(payload, userList = users, refs = null) {
         const reasons = (t.review_reasons || []).slice();
 
         // ---- assignee ----------------------------------------
-        const { user, reason } = resolveAssignee(t.assignee, team, userList);
+        const { user, reason, team_mismatch, found_departments } =
+            resolveAssignee(t.assignee, team, userList);
 
         if (reason) reasons.push(reason);
+
+        // A person from the other team in a tasklist is usually a wrong header
+        // (e.g. "Content tasklist" typed above a Design list). PMT shows a task
+        // only to its own team, so say so loudly instead of failing silently.
+        if (team_mismatch) {
+            log(
+                `WARNING: team mismatch. "${t.assignee}" is in ` +
+                `${(found_departments || []).join(" / ") || "another department"} in PMT, ` +
+                `but this message is a ${cap(team)} tasklist. ` +
+                `The task is held for review and the assignee will not see it. ` +
+                `If the header is wrong, fix it and send the message again.`
+            );
+        }
 
         // ---- match re-checked against the live data -----------
         const check = validateRefs(t, refs);
@@ -815,10 +834,13 @@ function buildDocuments(payload, userList = users, refs = null) {
             id: newId(),
 
             message_id: payload.message_id,
+            // every live message that asserts this task (a re-send adds one)
+            source_message_ids: [payload.message_id],
             seq: i + 1,
 
             work_date: workDate,
             team: team,
+            team_mismatch: team_mismatch === true,
 
             assignee_name: t.assignee,
             assignee_user_id: user ? user.id : null,
@@ -1068,26 +1090,83 @@ async function persist(payload) {
         { upsert: true }
     );
 
-    // 2. every task (existing ones are left exactly as they are)
+    // 2. every task. An existing one is left exactly as it is, except:
+    //    - a withdrawn one (its message was deleted or edited) is restored;
+    //    - one still waiting (needs_review / pending) that was filed under the
+    //      other team is moved to this message's team and re-checked.
+    //    Accepted, accepting and declined tasks are never touched.
     let inserted = 0;
+    let updated = 0;
 
-    if (items.length) {
+    for (const doc of items) {
 
-        const ops = items.map(doc => ({
-            updateOne: {
-                filter: {
-                    work_date: doc.work_date,
-                    assignee_name: doc.assignee_name,
-                    dedupe_key: doc.dedupe_key
-                },
-                update: { $setOnInsert: doc },
-                upsert: true
+        const filter = {
+            work_date: doc.work_date,
+            assignee_name: doc.assignee_name,
+            dedupe_key: doc.dedupe_key
+        };
+
+        const result = await db.collection(ITEMS).updateOne(
+            filter,
+            { $setOnInsert: doc },
+            { upsert: true }
+        );
+
+        if (result.upsertedCount) {
+            inserted += 1;
+            continue;
+        }
+
+        const existing = await db.collection(ITEMS).findOne(filter);
+
+        if (!existing) continue;
+
+        const restoring = existing.status === "withdrawn";
+        const reTeaming = WAITING_STATUSES.includes(existing.status) &&
+            (existing.team || null) !== (doc.team || null);
+
+        if (restoring || reTeaming) {
+
+            const { id, created_at, history, ...fresh } = doc;
+
+            const detail = restoring
+                ? "Message sent again after it was withdrawn"
+                : `Message sent again as a ${cap(doc.team)} tasklist (was ${cap(existing.team)})`;
+
+            const change = await db.collection(ITEMS).updateOne(
+                { id: existing.id, status: existing.status },
+                {
+                    $set: { ...fresh, updated_at: nowIso() },
+                    $push: {
+                        history: {
+                            at: nowIso(),
+                            by: "system",
+                            action: restoring ? "restored" : "re-teamed",
+                            detail
+                        }
+                    }
+                }
+            );
+
+            if (change.modifiedCount) {
+                updated += 1;
+                log(`Task "${doc.raw_line}" for ${doc.assignee_name}: ${detail}.`);
             }
-        }));
 
-        const result = await db.collection(ITEMS).bulkWrite(ops, { ordered: false });
+            continue;
 
-        inserted = result.upsertedCount || 0;
+        }
+
+        // Plain re-delivery or re-post: leave the task alone, but remember that
+        // this message asserts it too, so deleting the older one keeps it.
+        const known = existing.source_message_ids || [existing.message_id];
+
+        if (!known.includes(doc.message_id)) {
+            await db.collection(ITEMS).updateOne(
+                { id: existing.id },
+                { $set: { source_message_ids: [...known, doc.message_id] } }
+            );
+        }
 
     }
 
@@ -1142,7 +1221,8 @@ async function persist(payload) {
         message_new: (messageResult.upsertedCount || 0) > 0,
         tasks_in_message: items.length,
         tasks_inserted: inserted,
-        tasks_already_stored: items.length - inserted,
+        tasks_updated: updated,
+        tasks_already_stored: items.length - inserted - updated,
         duplicate_lines_skipped: skipped.length,
         logs_inserted: logged,
         needs_review: items.filter(i => i.needs_review).length,
@@ -1218,6 +1298,7 @@ async function saveTasklist(payload) {
 
         log(
             `Stored ${summary.tasks_inserted} new task(s)` +
+            (summary.tasks_updated ? `, ${summary.tasks_updated} updated or restored` : "") +
             (summary.tasks_already_stored ? `, ${summary.tasks_already_stored} already stored` : "") +
             `, ${summary.queued} queued for the assignee, ${summary.needs_review} need review (work date ${summary.work_date})`
         );
@@ -1237,6 +1318,115 @@ async function saveTasklist(payload) {
         return { stored: false, queued_in_outbox: true, error: error.message };
 
     }
+
+}
+
+
+// ------------------------------------------------------------
+// MESSAGE DELETED OR EDITED IN WHATSAPP
+// ------------------------------------------------------------
+//
+// A deleted message stops asserting its tasks. Tasks nobody has acted on
+// (needs_review / pending) become `withdrawn`, which PMT never shows. Tasks
+// that were accepted, are being accepted, or were declined stay exactly as they
+// are: work may already have started. A task another live message also
+// asserts (it was re-posted) stays too. An edit is a withdraw of the old
+// message followed by a normal save of the new text (restoring unchanged
+// lines), which is done by the caller.
+
+async function withdrawMessage(messageId, reason = "message deleted in WhatsApp") {
+
+    const none = { withdrawn: 0, kept_in_use: 0, kept_other_message: 0 };
+
+    if (!messageId || isDryRun()) return none;
+
+    if (!db) {
+        log(`Cannot withdraw ${messageId}: MongoDB is not connected.`);
+        return { ...none, error: "not connected" };
+    }
+
+    const found = new Map();
+
+    for (const filter of [{ source_message_ids: messageId }, { message_id: messageId }]) {
+        const rows = await db.collection(ITEMS).find(filter).toArray();
+        rows.forEach(r => found.set(r.id, r));
+    }
+
+    const result = { ...none };
+
+    for (const item of found.values()) {
+
+        const sources = item.source_message_ids || [item.message_id];
+        const remaining = sources.filter(id => id !== messageId);
+
+        if (remaining.length) {
+
+            await db.collection(ITEMS).updateOne(
+                { id: item.id },
+                { $set: { source_message_ids: remaining } }
+            );
+
+            result.kept_other_message += 1;
+            continue;
+
+        }
+
+        if (!WAITING_STATUSES.includes(item.status)) {
+
+            // accepted / accepting / declined / already withdrawn
+            if (item.status !== "withdrawn") result.kept_in_use += 1;
+            continue;
+
+        }
+
+        const change = await db.collection(ITEMS).updateOne(
+            { id: item.id, status: item.status },
+            {
+                $set: {
+                    status: "withdrawn",
+                    source_message_ids: [],
+                    withdrawn_at: nowIso(),
+                    updated_at: nowIso()
+                },
+                $push: {
+                    history: {
+                        at: nowIso(),
+                        by: "system",
+                        action: "withdrawn",
+                        detail: reason
+                    }
+                }
+            }
+        );
+
+        if (change.modifiedCount) result.withdrawn += 1;
+
+    }
+
+    await db.collection(TASKLISTS).updateOne(
+        { message_id: messageId },
+        { $set: { withdrawn_at: nowIso(), withdrawn_reason: reason } }
+    );
+
+    log(
+        `Message ${messageId} (${reason}): ${result.withdrawn} task(s) withdrawn` +
+        (result.kept_in_use ? `, ${result.kept_in_use} kept (already accepted or declined)` : "") +
+        (result.kept_other_message ? `, ${result.kept_other_message} kept (also sent in another message)` : "")
+    );
+
+    return result;
+
+}
+
+
+// The work date of a message already saved, so an edit stays on the same day.
+async function workDateOf(messageId) {
+
+    if (!db || !messageId) return null;
+
+    const row = await db.collection(TASKLISTS).findOne({ message_id: messageId });
+
+    return row ? row.work_date || null : null;
 
 }
 
@@ -1269,5 +1459,7 @@ module.exports = {
     istDate,
     flushOutbox,
     persist,
+    withdrawMessage,
+    workDateOf,
     _useDatabaseForTest
 };
