@@ -97,6 +97,16 @@ function escapeRegex(text) {
 
 // Removes WhatsApp formatting (*bold*, _italic_, ~strike~, `mono`)
 // from the start and end of a line only.
+// Text pasted from some editors arrives with HTML entities ("&#x20;" for a space).
+function decodeEntities(text) {
+    return (text || "")
+        .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+        .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+        .replace(/&nbsp;/gi, " ")
+        .replace(/&amp;/gi, "&");
+}
+
+
 function cleanFormatting(text) {
     return (text || "")
         .trim()
@@ -139,7 +149,7 @@ function detectTeam(text) {
 
     // the header is one of the first few lines
     const firstLines =
-        (text || "")
+        decodeEntities(text)
             .split(/\r?\n/)
             .map(line => line.trim())
             .filter(Boolean)
@@ -431,7 +441,66 @@ function splitCommaDeliverables(line) {
 }
 
 
+// ------------------------------------------------------------
+// ASSIGNEE HEADER, ONE OR SEVERAL PEOPLE
+//   "Shubham"   "Aniket, Vaishnavi"   "Aniket / Shubham"   "Nutan & Sanjana"
+//   "Shraddha Manali" (two known first names)   "*Bold wrapped*"
+// Returns { names, unknown } or null when the line is not a header.
+// ------------------------------------------------------------
+function headerNames(line, nextLine, knownAssignee) {
+
+    const bare = cleanFormatting(line.replace(/[:：]\s*$/, ""));
+
+    if (!bare) return null;
+
+    const wrapped = /^[*_~]+[^*_~]+[*_~]+$/.test(line.trim());
+
+    const whole = knownAssignee(bare);
+
+    if (whole) return { names: [whole], unknown: [] };
+
+    const parts = bare
+        .split(/\s*(?:,|\/|&|\+|\band\b)\s*/i)
+        .map(x => cleanFormatting(x))
+        .filter(Boolean);
+
+    if (parts.length === 0) return null;
+
+    const known = parts.map(knownAssignee);
+
+    if (known.every(Boolean)) return { names: known, unknown: [] };
+
+    // "Shraddha Manali": every word is a known name
+    if (parts.length === 1) {
+
+        const words = bare.split(/\s+/);
+
+        if (words.length > 1 && words.every(w => knownAssignee(w))) {
+            return { names: words.map(w => knownAssignee(w)), unknown: [] };
+        }
+
+    }
+
+    // a short name-only line that is bold, or directly followed by bullets
+    const looksLikeNames =
+        parts.every(x => x.split(/\s+/).length <= 4 && !/[-–—\d]/.test(x));
+
+    if (looksLikeNames && (wrapped || (nextLine && isBulleted(nextLine)))) {
+
+        const names = parts.map((x, k) => known[k] || x);
+
+        return { names, unknown: parts.filter((x, k) => !known[k]) };
+
+    }
+
+    return null;
+
+}
+
+
 function parseTaskList(text, assignees = []) {
+
+    text = decodeEntities(text);
 
     const lines =
         (text || "")
@@ -445,7 +514,7 @@ function parseTaskList(text, assignees = []) {
     const calls = [];
     const warnings = [];
 
-    let currentAssignee = null;
+    let currentAssignees = [];
     let inCalls = false;
 
 
@@ -470,7 +539,7 @@ function parseTaskList(text, assignees = []) {
         if (CALLS_RE.test(cleanFormatting(line))) {
 
             inCalls = true;
-            currentAssignee = null;
+            currentAssignees = [];
             continue;
 
         }
@@ -519,33 +588,14 @@ function parseTaskList(text, assignees = []) {
 
         if (!isBulleted(line)) {
 
-            const bare =
-                cleanFormatting(line.replace(/[:：]\s*$/, ""));
+            const header = headerNames(line, lines[i + 1] || "", knownAssignee);
 
-            const known = knownAssignee(bare);
+            if (header) {
 
-            if (known) {
+                currentAssignees = header.names;
 
-                currentAssignee = known;
-                continue;
-
-            }
-
-            // Unknown name: a short line with no separators,
-            // directly followed by bulleted lines.
-            const nextLine = lines[i + 1] || "";
-
-            if (
-                nextLine &&
-                isBulleted(nextLine) &&
-                bare.split(/\s+/).length <= 4 &&
-                !/[-–—]/.test(bare)
-            ) {
-
-                currentAssignee = bare;
-
-                warnings.push(
-                    `Assignee "${bare}" is not in ASSIGNEES`
+                header.unknown.forEach(name =>
+                    warnings.push(`Assignee "${name}" is not in ASSIGNEES`)
                 );
 
                 continue;
@@ -559,7 +609,7 @@ function parseTaskList(text, assignees = []) {
         // TASK LINE
         // ----------------------------------------------------
 
-        if (!currentAssignee) {
+        if (currentAssignees.length === 0) {
 
             warnings.push(
                 `Ignored line before first assignee: ${line}`
@@ -570,12 +620,17 @@ function parseTaskList(text, assignees = []) {
         }
 
 
+        // a header with several names gives every one of them the task
         for (const piece of splitCommaDeliverables(line)) {
 
-            tasks.push({
-                assignee: currentAssignee,
-                ...parseTaskLine(piece)
-            });
+            for (const assignee of currentAssignees) {
+
+                tasks.push({
+                    assignee: assignee,
+                    ...parseTaskLine(piece)
+                });
+
+            }
 
         }
 

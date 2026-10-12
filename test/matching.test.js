@@ -67,3 +67,47 @@ test("priority words are dropped everywhere and never stored", () => {
         assert.strictEqual(t.deliverable_name, "1 IG", line);
     }
 });
+
+// ---- headers naming several people --------------------------------
+const { isTaskListMessage } = require("../tasklistParser");
+
+const MULTI = [
+    "*&#x20;Design Tasklist*", "",
+    "*Shraddha Manali*", "ABSL PPT first for design approval", "",
+    "*Shubham*", "Canara Robeco Navratri Post", "",
+    "*Aniket, Vaishnavi*", "ABSL Emerging Market storyboard once content is approved", "",
+    "*Nutan, Sanjana*", "IPRU Pharma pending creatives", "",
+    "*Aniket / Shubham*", "Design discussion for pen stand calculator for SIP + SWP", "",
+    "*Nutan*", "Your US Exposure, From GIFT City"
+].join("\n");
+
+const PEOPLE = ["Shraddha", "Manali", "Shubham", "Aniket", "Vaishnavi", "Nutan", "Sanjana", "Anjali"];
+
+test("an entity-garbled bold header is still recognised as a tasklist", () => {
+    assert.strictEqual(isTaskListMessage(MULTI), true);
+});
+
+test("a header with several names gives every person the task", () => {
+    const r = parseTaskList(MULTI, PEOPLE);
+    const who = line => r.tasks.filter(t => t.raw_line.startsWith(line)).map(t => t.assignee).sort();
+    assert.deepStrictEqual(who("ABSL PPT first"), ["Manali", "Shraddha"]);
+    assert.deepStrictEqual(who("ABSL Emerging"), ["Aniket", "Vaishnavi"]);
+    assert.deepStrictEqual(who("IPRU Pharma"), ["Nutan", "Sanjana"]);
+    assert.deepStrictEqual(who("Design discussion"), ["Aniket", "Shubham"]);
+    assert.deepStrictEqual(who("Canara"), ["Shubham"]);
+    assert.strictEqual(r.tasks.length, 10);
+    assert.deepStrictEqual(r.warnings, []);
+});
+
+test("a comma inside an unbulleted task line is not a second deliverable or a header", () => {
+    const r = parseTaskList(MULTI, PEOPLE);
+    const t = r.tasks.find(x => x.raw_line.startsWith("Your US Exposure"));
+    assert.strictEqual(t.assignee, "Nutan");
+    assert.match(t.deliverable_name, /Your US Exposure, From GIFT City/);
+});
+
+test("an unknown name in a bold multi-name header still gets its tasks, with a warning", () => {
+    const r = parseTaskList("Design Tasklist\n\n*Aniket, Newperson*\nABSL PPT", ["Aniket"]);
+    assert.deepStrictEqual(r.tasks.map(t => t.assignee).sort(), ["Aniket", "Newperson"]);
+    assert.ok(r.warnings.some(w => /Newperson/.test(w)));
+});
