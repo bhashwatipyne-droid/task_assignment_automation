@@ -825,9 +825,30 @@ function buildDocuments(payload, userList = users, refs = null) {
             reasons.push("Client or project is not confirmed");
         }
 
-        const needsReview = reasons.length > 0 || t.needs_review === true;
+        // The client is certain (named in the text) and the only problem is that no
+        // project of that client matches: the assignee still gets the task, marked
+        // "project to be confirmed", instead of it waiting in the review queue.
+        // Anything ambiguous, guessed or weak still goes to a manager.
+        const allReasons = Array.from(new Set(reasons.concat(t.review_reasons || [])));
 
-        const finalReasons = Array.from(new Set(reasons));
+        const projectOnlyMissing =
+            !!clientId &&
+            !projectId &&
+            !!user &&
+            !team_mismatch &&
+            t.client_source === "name in text" &&
+            allReasons.length > 0 &&
+            allReasons.every(r =>
+                /^No matching project in the database/.test(r) ||
+                /^Project not found in the database/.test(r) ||
+                /^Client or project is not confirmed/.test(r)
+            );
+
+        const needsReview = projectOnlyMissing
+            ? false
+            : (reasons.length > 0 || t.needs_review === true);
+
+        const finalReasons = projectOnlyMissing ? [] : Array.from(new Set(reasons));
 
         items.push({
 
@@ -854,6 +875,7 @@ function buildDocuments(payload, userList = users, refs = null) {
             project_id: projectId,
             project_name: t.project_name || null,
             project_text: t.project_text || null,
+            project_unconfirmed: projectOnlyMissing,
 
             deliverable_name: t.deliverable_name || null,
             db_deliverable: t.db_deliverable || null,

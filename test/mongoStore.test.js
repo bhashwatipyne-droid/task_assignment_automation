@@ -24,7 +24,8 @@ const USERS = [
     { id: "member-rt", name: "Ratnesh Testing", role: "member", department: "Content" },
     { id: "manager-sa", name: "Sakshi Agrawal", role: "manager", department: "Content" },
     { id: "admin-sc", name: "Sakshi Chaurasia", role: "admin", department: "Administration" },
-    { id: "member-an", name: "Aniket Bangal", role: "member", department: "Design" }
+    { id: "member-an", name: "Aniket Bangal", role: "member", department: "Design" },
+    { id: "member-nc", name: "Nutan Chikhale", role: "member", department: "Design" }
 ];
 
 const ASSIGNEES = ["Harshal", "Vanshika", "Ratnesh", "Sakshi", "Aniket", "Nobody"];
@@ -508,4 +509,31 @@ test("an edit: removed lines are withdrawn, kept lines restored, new lines added
     assert.notEqual(byLine["New second line"], "withdrawn");
     assert.equal(out.tasks_inserted, 1);
     assert.equal(out.tasks_updated, 1);
+});
+
+
+// ---------------------------------------------------------------
+// client named, project not in the database: the assignee still gets the task
+// ---------------------------------------------------------------
+
+test("a named client with no matching project still reaches the assignee, marked unconfirmed", async () => {
+    const db = liveDb();
+    await store.persist(payloadFor("Design Tasklist\n\n*Aniket, Nutan*\nABSL PPT first for design approval"));
+
+    const items = db.all("tasklist_items");
+    assert.equal(items.length, 2, "one task per named person");
+    for (const i of items) {
+        assert.equal(i.status, "pending");
+        assert.equal(i.project_unconfirmed, true);
+        assert.equal(i.project_id, null);
+        assert.ok(i.client_id, "client is certain");
+    }
+});
+
+test("an ambiguous or guessed-client task is still held for review", async () => {
+    const db = liveDb();
+    await store.persist(payloadFor("Design Tasklist\n\nAniket\nPharma creative changes"));
+    const [i] = db.all("tasklist_items");
+    assert.equal(i.status, "needs_review");
+    assert.equal(i.project_unconfirmed, false);
 });
