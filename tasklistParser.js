@@ -369,6 +369,73 @@ function parseTaskLine(rawLine) {
 // PARSE WHOLE TASKLIST
 // ------------------------------------------------------------
 
+
+// ------------------------------------------------------------
+// COMMA = SEPARATE DELIVERABLES
+// "TFP Premium - 1 IG, 1 Minimalist" is two worksheet entries:
+//   "TFP Premium - 1 IG" and "TFP Premium - 1 Minimalist".
+// Everything before and after the comma-separated part is repeated on
+// each entry. The first part (client / project) is never split, commas
+// inside brackets or between digits ("1,000") are left alone.
+// ------------------------------------------------------------
+function splitCommaDeliverables(line) {
+
+    const bulletMatch = line.match(BULLET_RE);
+    const bullet = bulletMatch ? bulletMatch[0] : "";
+    const body = line.slice(bullet.length);
+
+    const segments = body.split(/\s+[-–—]\s+/);
+
+    if (segments.length < 2) return [line];
+
+    for (let i = 1; i < segments.length; i++) {
+
+        const parts = [];
+        let depth = 0;
+        let cur = "";
+        const seg = segments[i];
+
+        for (let k = 0; k < seg.length; k++) {
+
+            const ch = seg[k];
+
+            if ("([{".includes(ch)) depth++;
+            else if (")]}".includes(ch)) depth = Math.max(0, depth - 1);
+
+            const isComma = ch === "," || ch === "،";
+            const digitComma = ch === "," && /\d/.test(seg[k - 1] || "") && /\d/.test(seg[k + 1] || "");
+
+            if (isComma && depth === 0 && !digitComma) {
+                parts.push(cur);
+                cur = "";
+            } else {
+                cur += ch;
+            }
+
+        }
+
+        parts.push(cur);
+
+        const pieces = parts.map(x => x.trim()).filter(Boolean);
+
+        if (pieces.length < 2) continue;
+
+        // every piece must look like a deliverable, not a stray fragment
+        if (!pieces.every(x => /[\p{L}\d]/u.test(x))) return [line];
+
+        return pieces.map(piece => {
+            const copy = segments.slice();
+            copy[i] = piece;
+            return bullet + copy.join(" - ");
+        });
+
+    }
+
+    return [line];
+
+}
+
+
 function parseTaskList(text, assignees = []) {
 
     const lines =
@@ -508,10 +575,14 @@ function parseTaskList(text, assignees = []) {
         }
 
 
-        tasks.push({
-            assignee: currentAssignee,
-            ...parseTaskLine(line)
-        });
+        for (const piece of splitCommaDeliverables(line)) {
+
+            tasks.push({
+                assignee: currentAssignee,
+                ...parseTaskLine(piece)
+            });
+
+        }
 
     }
 
