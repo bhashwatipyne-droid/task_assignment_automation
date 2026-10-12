@@ -565,7 +565,7 @@ function resolveLine(rawLine) {
 
 
     // ---- split what is left into segments -------------------
-    const segments =
+    let segments =
         rest
             .split(/\s+[-–—]\s+|\s*[–—]\s*/)
             .map(tidy)
@@ -577,6 +577,34 @@ function resolveLine(rawLine) {
     // nothing left after the client name
     if (segments.length === 0) {
         return finish(result, "Only a client name was given");
+    }
+
+
+    // A project name can itself contain " - " ("Invesco Fund Performance
+    // Storytelling - Large & Mid cap"). Cutting there leaves the shorter
+    // sibling project matching perfectly and the rest read as a deliverable.
+    // When the first segments written out together are (almost entirely) the
+    // full name of one project, keep them together.
+    for (let k = Math.min(segments.length, 4); k >= 2; k--) {
+
+        const joined = segments.slice(0, k).join(" - ");
+
+        const whole = rank(toTokens(joined, phrases), "project", clientSet)[0];
+        const first = rank(toTokens(segments[0], phrases), "project", clientSet)[0];
+
+        if (
+            strongProject(whole) &&
+            whole.recall >= 0.999 &&
+            whole.precision >= 0.85 &&
+            (!first || whole.entity.id !== first.entity.id) &&
+            (!first || whole.entity.toks.length > first.entity.toks.length)
+        ) {
+
+            segments = [joined].concat(segments.slice(k));
+            break;
+
+        }
+
     }
 
 
@@ -1042,6 +1070,17 @@ function finish(result, reason) {
         result.confidence.client < 0.7
     ) {
         result.review_reasons.push("Client was guessed, please confirm");
+    }
+
+    // Client was inferred and the line named no project: the match rests only on a
+    // deliverable name that several clients can share (e.g. "Teaser"). Ask a manager.
+    if (
+        result.client_id &&
+        result.client_source &&
+        result.client_source !== "name in text" &&
+        !result.project_text
+    ) {
+        result.review_reasons.push("Neither client nor project was named, matched on the deliverable name only, please confirm");
     }
 
     if (

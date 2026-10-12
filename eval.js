@@ -42,7 +42,7 @@ const shortName = (clientId) => {
 // strip the client name out of a DB name so the test text does not repeat it
 const projectsOnly = L.projects.filter(p => !p.alt && p.client_id);
 
-let nA = 0, clientOkA = 0, projOkA = 0;
+let nA = 0, clientOkA = 0, projOkA = 0, qA = 0, qOkA = 0;
 const missesA = [];
 
 for (const p of sample(projectsOnly, 250)) {
@@ -54,13 +54,17 @@ for (const p of sample(projectsOnly, 250)) {
     const r = matcher.resolveLine(text);
 
     nA++;
+    if (!r.needs_review) {
+        qA++;
+        if (r.client_id === p.client_id && r.project_id === p.id) qOkA++;
+    }
     if (r.client_id === p.client_id) clientOkA++;
     if (r.project_id === p.id) projOkA++;
     else if (missesA.length < 12) missesA.push([text, r.project_name]);
 
 }
 
-let nB = 0, clientOkB = 0, projOkB = 0, delFoundB = 0;
+let nB = 0, clientOkB = 0, projOkB = 0, delFoundB = 0, qB = 0, qOkB = 0;
 const missesB = [];
 
 const projById = new Map(L.projects.filter(p => !p.alt).map(p => [p.id, p]));
@@ -75,10 +79,28 @@ for (const d of sample(L.deliverables.filter(x => projById.has(x.project_id)), 3
     const r = matcher.resolveLine(text);
 
     nB++;
+    if (!r.needs_review) {
+        qB++;
+        if (r.client_id === proj.client_id && r.project_id === proj.id) qOkB++;
+    }
     if (r.client_id === proj.client_id) clientOkB++;
     if (r.project_id === proj.id) projOkB++;
     else if (missesB.length < 12) missesB.push([text.slice(0, 90), r.project_name]);
     if (r.deliverable_name) delFoundB++;
+
+}
+
+// C. a deliverable name on its own ("Teaser"): no client, no project. Nothing in
+//    the line says which client it is for, so it must never go straight to an
+//    assignee - a manager has to confirm it.
+let nC = 0, qC = 0;
+
+for (const d of sample(L.deliverables.filter(x => projById.has(x.project_id)), 300)) {
+
+    const r = matcher.resolveLine(d.name);
+
+    nC++;
+    if (!r.needs_review) { qC++; if (process.env.SHOWC) console.log("   C-queued:", JSON.stringify(d.name), "->", r.client_name || r.client, "/", r.project_name || r.project, r.client_source, "ptext=", r.project_text); }
 
 }
 
@@ -91,6 +113,13 @@ console.log(`B. client + project - deliverable (n=${nB})`);
 console.log(`   client correct  ${pct(clientOkB, nB)}`);
 console.log(`   project correct ${pct(projOkB, nB)}`);
 console.log(`   deliverable text kept ${pct(delFoundB, nB)}`);
+
+console.log("");
+console.log("Straight to the assignee (no review) - how often is it exactly right?");
+console.log(`   A. ${qA} of ${nA} skipped review, exactly right ${pct(qOkA, qA)}`);
+console.log(`   B. ${qB} of ${nB} skipped review, exactly right ${pct(qOkB, qB)}`);
+console.log(`C. deliverable name only (n=${nC})`);
+console.log(`   sent straight to an assignee WITHOUT review: ${qC} of ${nC} (should be 0)`);
 
 console.log("\nSample misses (A):");
 missesA.slice(0, 6).forEach(m => console.log("  ", m[0], " -> ", m[1]));
