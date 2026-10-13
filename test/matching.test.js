@@ -199,3 +199,10 @@ test("a full deliverable name that exists once in PMT needs no confirmation; a g
     assert.strictEqual(g.needs_review, true);
     assert.ok(g.review_reasons.some(r => /deliverable name only/.test(r)));
 });
+
+test("'BBNP' is Baroda BNP Paribas, named in the text (not guessed)", () => {
+    const [t] = parse(["BBNP Balanced Hybrid fund AV - Changes"]);
+    assert.strictEqual(t.client_name, "Baroda BNP Paribas");
+    assert.strictEqual(t.client_source, "name in text");
+    assert.ok(!t.review_reasons.some(r => /guessed/.test(r)), t.review_reasons.join("; "));
+});

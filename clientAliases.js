@@ -11,7 +11,7 @@ const CLIENT_ALIASES = {
     "Aditya Birla Sun Life Mutual Fund": ["aditya birla sun life", "aditya birla", "absl"],
     "ABSL Apex SIF": ["absl apex"],
     "Aditya Birla Alternative": ["absl alternative", "aditya birla alternative"],
-    "Baroda BNP Paribas": ["baroda bnp paribas", "baroda bnp", "bnp paribas", "bnp"],
+    "Baroda BNP Paribas": ["baroda bnp paribas", "baroda bnp", "bnp paribas", "bbnp", "bnp"],
     "Canara Robeco": ["canara robeco", "canara robecco", "canara"],
     "Invesco": ["invesco"],
     "Bandhan": ["bandhan"],
