@@ -150,7 +150,17 @@ function useLexicon(lex) {
 
     aliasList.sort((a, b) => b.words.length - a.words.length);
 
+    // how many deliverables share each exact wording (a bare deliverable name
+    // can only be trusted when it is the only one of its kind)
+    const delSigCount = new Map();
+
+    for (const d of LEX.deliverables) {
+        const sig = d.toks.join(" ");
+        delSigCount.set(sig, (delSigCount.get(sig) || 0) + 1);
+    }
+
     state = {
+        delSigCount,
         clientById,
         phrasesByClient,
         projIndex,
@@ -1015,6 +1025,17 @@ function resolveLine(rawLine) {
             result.db_match.deliverable_in_db = cands[0].entity.name;
             result.db_match.deliverable_id = cands[0].entity.id;
 
+            // A full, specific deliverable name that exists exactly once in PMT
+            // ("Stay Focused Without Losing the Bigger Picture") identifies its
+            // project and client by itself; it does not need to be confirmed.
+            // Generic names ("Teaser", "Reel") are shared, so they never qualify.
+            result._exactDeliverable =
+                cands[0].raw >= 0.95 &&
+                cands[0].recall >= 0.999 &&
+                cands[0].precision >= 0.9 &&
+                cands[0].entity.toks.length >= 3 &&
+                state.delSigCount.get(cands[0].entity.toks.join(" ")) === 1;
+
         }
 
         // Observability only (does not change any decision above): the
@@ -1144,6 +1165,10 @@ function finish(result, reason) {
 
     delete result._family;
 
+    const exactDeliverable = result._exactDeliverable === true;
+
+    delete result._exactDeliverable;
+
     if (reason) result.review_reasons.push(reason);
 
     if (!result.client_id) {
@@ -1155,6 +1180,7 @@ function finish(result, reason) {
     }
 
     if (
+        !exactDeliverable &&
         result.client_source &&
         result.client_source !== "name in text" &&
         result.confidence.client < 0.7
@@ -1165,6 +1191,7 @@ function finish(result, reason) {
     // Client was inferred and the line named no project: the match rests only on a
     // deliverable name that several clients can share (e.g. "Teaser"). Ask a manager.
     if (
+        !(exactDeliverable && result.project_id) &&
         result.client_id &&
         result.client_source &&
         result.client_source !== "name in text" &&

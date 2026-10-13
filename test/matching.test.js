@@ -187,3 +187,15 @@ test("two booklet projects with only 'booklet' to go on are still ambiguous", ()
     const [t] = parse(["Amfi booklet - kannada"]);
     assert.ok(t.review_reasons.some(r => /^Ambiguous project/.test(r)));
 });
+
+test("a full deliverable name that exists once in PMT needs no confirmation; a generic one still does", () => {
+    const [t] = parse(["Stay Focused Without Losing the Bigger Picture"]);
+    assert.match(t.client_name, /Franklin/);
+    assert.ok(t.project_name);
+    assert.deepStrictEqual(t.review_reasons, []);
+
+    // shared, generic names are still held for a manager
+    const [g] = parse(["Teaser"]);
+    assert.strictEqual(g.needs_review, true);
+    assert.ok(g.review_reasons.some(r => /deliverable name only/.test(r)));
+});
