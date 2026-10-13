@@ -66,7 +66,7 @@ catch (error) {
 }
 
 function matcherReady() {
-    return MATCHER_READY;
+    return MATCHER_READY || matcher.isReady();
 }
 
 
@@ -264,7 +264,7 @@ function matchClient(text) {
 
 function parseTaskLine(rawLine) {
 
-    if (MATCHER_READY) {
+    if (matcherReady()) {
 
         const m = matcher.resolveLine(rawLine);
 
@@ -383,6 +383,45 @@ function parseTaskLine(rawLine) {
 // each entry. The first part (client / project) is never split, commas
 // inside brackets or between digits ("1,000") are left alone.
 // ------------------------------------------------------------
+// A comma inside a deliverable that exists in PMT under that name
+// ("Your US Exposure, From GIFT City") is part of its name. Hide those commas
+// from the splitter (\u0001) and put them back afterwards.
+const HIDDEN_COMMA = "\u0001";
+
+let commaRegexCache = { list: null, regexes: [] };
+
+function protectKnownCommas(text) {
+
+    if (!matcherReady()) return text;
+
+    const list = matcher.commaPhrases();
+
+    if (commaRegexCache.list !== list) {
+
+        commaRegexCache = {
+            list,
+            regexes: list.map(p =>
+                new RegExp(p.split(" ").map(w => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[^a-z0-9]+"), "gi")
+            )
+        };
+
+    }
+
+    let out = text;
+
+    for (const re of commaRegexCache.regexes) {
+
+        re.lastIndex = 0;
+
+        out = out.replace(re, (m) => m.replace(/[,،]/g, HIDDEN_COMMA));
+
+    }
+
+    return out;
+
+}
+
+
 function splitCommaDeliverables(line) {
 
     const bulletMatch = line.match(BULLET_RE);
@@ -398,7 +437,7 @@ function splitCommaDeliverables(line) {
         const parts = [];
         let depth = 0;
         let cur = "";
-        const seg = segments[i];
+        const seg = protectKnownCommas(segments[i]);
 
         for (let k = 0; k < seg.length; k++) {
 
@@ -430,7 +469,7 @@ function splitCommaDeliverables(line) {
 
         return pieces.map(piece => {
             const copy = segments.slice();
-            copy[i] = piece;
+            copy[i] = piece.split(HIDDEN_COMMA).join(",");
             return bullet + copy.join(" - ");
         });
 

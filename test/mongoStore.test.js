@@ -632,3 +632,56 @@ test("two PMT projects with the same name are not an 'ambiguous project'", async
     const [item] = db.all("tasklist_items");
     assert.ok(!(item.review_reasons || []).some(r => /^Ambiguous project/.test(r)), JSON.stringify(item.review_reasons));
 });
+
+
+// ---------------------------------------------------------------
+// the matcher follows the live PMT data
+// ---------------------------------------------------------------
+
+test("a deliverable moved to another project in PMT is matched there once the lexicon is refreshed", async () => {
+    const matcher = require("../tasklistMatcher");
+    const line = "Design Team\nAniket\n- FT US Equity - Beyond the Next Destination _IG";
+
+    try {
+        const db = liveDb(d => {
+            d.collection("projects").docs.push({
+                id: "MOVED-1", name: "Franklin US Equity IFSC Fund - Campaign", client_id: "CLIENT - 016", hidden: false
+            });
+            const del = d.collection("deliverables").docs.find(x => /^Beyond the Next Destination$/.test(x.name));
+            del.project_id = "MOVED-1";
+        });
+
+        // the old snapshot still says it sits under "FT Product Creatives"
+        await store.persist(payloadFor(line));
+        assert.ok(
+            db.all("tasklist_items")[0].review_reasons.some(r => /belongs to a different project/.test(r)),
+            "the stale snapshot is what flagged it"
+        );
+
+        // rebuilt from the live data it is found under its real project
+        assert.equal(await store.refreshLexicon(true), true);
+
+        const db2 = liveDb(d => {
+            d.collection("projects").docs.push({
+                id: "MOVED-1", name: "Franklin US Equity IFSC Fund - Campaign", client_id: "CLIENT - 016", hidden: false
+            });
+            d.collection("deliverables").docs.find(x => /^Beyond the Next Destination$/.test(x.name)).project_id = "MOVED-1";
+        });
+        await store.refreshLexicon(true);
+        await store.persist(payloadFor(line, { timestamp: "2026-10-10T05:00:00.000Z" }));
+
+        const item = db2.all("tasklist_items")[0];
+        assert.equal(item.project_id, "MOVED-1");
+        assert.ok(!item.review_reasons.some(r => /belongs to a different project/.test(r)), item.review_reasons.join("; "));
+    } finally {
+        matcher.loadLexicon();      // back to the bundled snapshot for the other tests
+    }
+});
+
+test("an empty database never replaces a good lexicon", async () => {
+    const matcher = require("../tasklistMatcher");
+    store._useDatabaseForTest(new FakeDb(), USERS);
+    const before = matcher.lexiconInfo().built_at;
+    assert.equal(await store.refreshLexicon(true), false);
+    assert.equal(matcher.lexiconInfo().built_at, before);
+});

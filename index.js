@@ -679,6 +679,10 @@ async function startWhatsApp() {
                         ...store.assigneeNames(TEAM_ROSTER)
                     ])];
 
+                    // projects and deliverables change daily in PMT: match
+                    // against the live data, not an old snapshot
+                    await store.refreshLexicon();
+
                     parsedTaskList =
                         parseTaskList(
                             text,
@@ -1021,6 +1025,7 @@ store.init()
     .catch((error) => {
         console.error("Store init error:", error.message);
     })
+    .then(() => store.refreshLexicon(true))
     .then(() => startWhatsApp())
     .catch(
         (error) => {

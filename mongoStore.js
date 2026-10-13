@@ -59,6 +59,9 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 
+const matcher = require("./tasklistMatcher");
+const { buildLexicon } = require("./lexiconBuilder");
+
 
 let MongoClient = null;
 
@@ -381,6 +384,72 @@ async function loadUsers(force = false) {
     }
 
     return users;
+
+}
+
+
+// ------------------------------------------------------------
+// LEXICON  (what the matcher scores task lines against)
+// lexicon.json is only the starting point: projects and deliverables are
+// renamed, moved and merged in PMT every day, and a snapshot of last week
+// flags good lines ("deliverable belongs to a different project", "project
+// no longer exists"). So the matcher is rebuilt from the live database, at
+// start-up and before a tasklist is read once the copy is older than
+// LEXICON_MAX_AGE_MS (5 minutes by default).
+// ------------------------------------------------------------
+
+const LEXICON_MAX_AGE_MS = Number(process.env.LEXICON_MAX_AGE_MS) || 5 * 60 * 1000;
+
+let lexiconRefreshedAt = 0;
+
+
+async function refreshLexicon(force = false) {
+
+    if (!db) return false;
+
+    if (!force && Date.now() - lexiconRefreshedAt < LEXICON_MAX_AGE_MS) {
+        return false;
+    }
+
+    try {
+
+        const [projects, deliverables, clients] = await Promise.all([
+            db.collection("projects").find(
+                {},
+                { projection: { _id: 0, id: 1, name: 1, client_id: 1, status: 1, hidden: 1, duplicate_of: 1, created_at: 1, updated_at: 1 } }
+            ).toArray(),
+            db.collection("deliverables").find(
+                {},
+                { projection: { _id: 0, id: 1, name: 1, project_id: 1, created_at: 1, updated_at: 1 } }
+            ).toArray(),
+            db.collection("clients").find({}, { projection: { _id: 0, id: 1, name: 1 } }).toArray()
+        ]);
+
+        // never replace a good lexicon with one built from an empty read
+        if (!projects.length || !clients.length) {
+            log("Lexicon not rebuilt: the database returned no projects or clients.");
+            return false;
+        }
+
+        const lexicon = buildLexicon(projects, deliverables, clients);
+
+        matcher.useLexicon(lexicon);
+
+        lexiconRefreshedAt = Date.now();
+
+        log(
+            `Lexicon rebuilt from live PMT data: ${lexicon.stats.live_projects} projects, ` +
+            `${lexicon.stats.deliverables} deliverables, ${lexicon.stats.clients} clients.`
+        );
+
+        return true;
+
+    }
+
+    catch (error) {
+        log("Could not rebuild the lexicon from PMT, keeping the previous one:", error.message);
+        return false;
+    }
 
 }
 
@@ -1577,6 +1646,7 @@ module.exports = {
     resolveAssignee,
     assigneeNames,
     loadUsers,
+    refreshLexicon,
     resolveAssigner,
     validateRefs,
     loadReferences,

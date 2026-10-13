@@ -63,6 +63,9 @@ const TYPE_WORDS = new Set([
 ]);
 
 
+const TYPE_STEMS = new Set([...TYPE_WORDS].map(stem));
+
+
 // ------------------------------------------------------------
 // LOAD LEXICON
 // ------------------------------------------------------------
@@ -82,7 +85,17 @@ function loadLexicon(file) {
         return false;
     }
 
-    LEX = JSON.parse(fs.readFileSync(lexFile, "utf8"));
+    return useLexicon(JSON.parse(fs.readFileSync(lexFile, "utf8")));
+
+}
+
+
+// Make a lexicon (an object, as lexicon.json holds it) the live one. Used at
+// start-up from lexicon.json and again whenever it is rebuilt from the live
+// PMT data, so the matcher never works from a stale snapshot for long.
+function useLexicon(lex) {
+
+    LEX = lex;
 
     const clientById = new Map(LEX.clients.map(c => [c.id, c]));
 
@@ -158,6 +171,34 @@ function loadLexicon(file) {
 
 function isReady() {
     return state !== null;
+}
+
+
+// Deliverable names that contain a comma ("Your US Exposure, From GIFT City").
+// The parser must not read that comma as "two deliverables".
+let commaPhraseCache = null;
+
+function commaPhrases() {
+
+    if (!LEX) return [];
+
+    if (commaPhraseCache && commaPhraseCache.lex === LEX) {
+        return commaPhraseCache.list;
+    }
+
+    const list = [...new Set(
+        LEX.deliverables
+            .map(d => d.name || "")
+            .filter(n => /[,،]/.test(n))
+            .map(n => words(n))
+            .filter(w => w.length >= 2)
+            .map(w => w.join(" "))
+    )];
+
+    commaPhraseCache = { lex: LEX, list };
+
+    return list;
+
 }
 
 
@@ -474,7 +515,8 @@ function resolveLine(rawLine) {
         return null;
     }
 
-    let text = stripWrapping(rawLine.replace(BULLET_RE, ""));
+    // "ABSL_Emerging market" / "Destination _IG": an underscore is a space
+    let text = stripWrapping(rawLine.replace(BULLET_RE, "")).replace(/_/g, " ");
 
     const result = {
         client_name: null,
@@ -519,6 +561,15 @@ function resolveLine(rawLine) {
         notes.push("if any");
         return " ";
     });
+
+    // un-bracketed conditions: "once scripts are approved", "after approval"
+    text = text.replace(
+        /\b(?:once|after|when)\s+[^-–—,;]*?\b(?:approved|approval|confirmed|finali[sz]ed|ready|received)\b/gi,
+        (m) => {
+            notes.push(m.trim());
+            return " ";
+        }
+    );
 
     if (notes.length) result.notes = notes.join("; ");
 
@@ -1049,9 +1100,28 @@ function resolveLine(rawLine) {
 
     const alts = result.db_match.alternatives;
 
+    // The best project is not a coin flip when it holds a distinctive word of
+    // the line (not a deliverable-type word like "creatives" / "booklet") that
+    // the runner-up lacks, and the runner-up holds none that the best lacks:
+    // "ICICI Pharma - creatives" fits "IPru Pharma ETF Campaign" on "pharma",
+    // while "Ipru Products Updation and Creatives" only shares "creatives".
+    const rows = altSource.projects.filter(r => r.raw > 0.15).slice(0, 3);
+
+    const distinctive = (row) =>
+        altSource.q.filter(t => !TYPE_STEMS.has(t) && row.entity.toks.includes(t));
+
+    const dominant =
+        rows.length > 1 &&
+        (() => {
+            const a = distinctive(rows[0]);
+            const b = distinctive(rows[1]);
+            return a.some(t => !b.includes(t)) && !b.some(t => !a.includes(t));
+        })();
+
     if (
         result.project_id &&
         alts.length > 1 &&
+        !dominant &&
         alts[0].project === result.project_name &&
         alts[0].score - alts[1].score < 0.15 &&
         // two PMT projects with the very same name and client are one project
@@ -1121,6 +1191,8 @@ function finish(result, reason) {
 
 module.exports = {
     loadLexicon,
+    useLexicon,
+    commaPhrases,
     isReady,
     lexiconInfo,
     resolveLine

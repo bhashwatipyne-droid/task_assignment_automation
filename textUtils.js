@@ -20,7 +20,8 @@ const SYN = {
     updated: "update",
     updates: "update",
     pptx: "ppt",
-    ppts: "ppt"
+    ppts: "ppt",
+    sr: "senior"
 };
 
 

@@ -146,3 +146,44 @@ test("identical text from two different lines is kept, the same line typed twice
     // a literal repeat of a line is still the same entries (the store drops it)
     assert.ok(twice.filter(t => t.dup_index).every(t => t.dup_index >= 2));
 });
+
+// ---------------------------------------------------------------
+// edge cases from the 13 Oct Design tasklist
+// ---------------------------------------------------------------
+
+test("a comma inside a deliverable that exists in PMT is not a split", () => {
+    const tasks = parse(["FT US Equity - Your US Exposure, From GIFT City - Minimalist"]);
+    assert.strictEqual(tasks.length, 1);
+    assert.match(tasks[0].deliverable_name, /Your US Exposure, From GIFT City/);
+    // a real comma-separated list is still split
+    assert.strictEqual(parse(["- TFP Premium - 1 Reel, 1 Carousel"]).length, 2);
+});
+
+test("an underscore is a space: 'ABSL_Emerging market storyboard' finds its client", () => {
+    const [t] = parse(["ABSL_Emerging market storyboard"]);
+    assert.match(t.client_name, /Aditya Birla/);
+    assert.ok(!t.review_reasons.some(r => /guessed/.test(r)), t.review_reasons.join("; "));
+});
+
+test("'sr citizen' is 'senior citizen'", () => {
+    const [t] = parse(["FT sr citizen - Creative 1 (MInimalist)"]);
+    assert.match(t.project_name, /Senior Citizen/);
+    assert.ok(!t.review_reasons.some(r => /Weak project/.test(r)), t.review_reasons.join("; "));
+});
+
+test("'once scripts are approved' is a note, and the project is not a coin flip", () => {
+    const [t] = parse(["ICICI Pharma-creatives once scripts are approved"]);
+    assert.match(t.notes, /once scripts are approved/);
+    assert.match(t.project_name, /Pharma ETF/);
+    assert.ok(!t.review_reasons.some(r => /^Ambiguous project/.test(r)), t.review_reasons.join("; "));
+});
+
+test("a runner-up that only shares a generic word does not make the project ambiguous", () => {
+    const [t] = parse(["Icici Fund Guides (Review)"]);
+    assert.ok(!t.review_reasons.some(r => /^Ambiguous project/.test(r)), t.review_reasons.join("; "));
+});
+
+test("two booklet projects with only 'booklet' to go on are still ambiguous", () => {
+    const [t] = parse(["Amfi booklet - kannada"]);
+    assert.ok(t.review_reasons.some(r => /^Ambiguous project/.test(r)));
+});
