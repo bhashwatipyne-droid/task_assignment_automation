@@ -142,7 +142,7 @@ function nowIso() {
 }
 
 
-function dedupeKey(workDate, assignee, rawLine) {
+function dedupeKey(workDate, assignee, rawLine, copyIndex, copyTotal) {
 
     const norm = (rawLine || "")
         .toLowerCase()
@@ -150,9 +150,15 @@ function dedupeKey(workDate, assignee, rawLine) {
         .replace(/\s+/g, " ")
         .trim();
 
+    // "2 Minimalist" is two tasks with identical text: the copy number keeps
+    // them apart. A normal line (no copies) hashes exactly as before.
+    const parts = [workDate, (assignee || "").toLowerCase(), norm];
+
+    if (copyTotal > 1) parts.push(`#${copyIndex}`);
+
     return crypto
         .createHash("sha1")
-        .update([workDate, (assignee || "").toLowerCase(), norm].join("|"))
+        .update(parts.join("|"))
         .digest("hex")
         .slice(0, 20);
 
@@ -739,7 +745,7 @@ function buildDocuments(payload, userList = users, refs = null) {
 
     tasks.forEach((t, i) => {
 
-        const key = dedupeKey(workDate, t.assignee, t.raw_line);
+        const key = dedupeKey(workDate, t.assignee, t.raw_line, t.copy_index, t.copy_total);
 
         const baseLog = {
             message_id: payload.message_id,
@@ -923,6 +929,10 @@ function buildDocuments(payload, userList = users, refs = null) {
             raw_line: t.raw_line,
             dedupe_key: key,
 
+            // "2 Minimalist" becomes two tasks: 1 of 2, 2 of 2 (null otherwise)
+            copy_index: t.copy_total > 1 ? t.copy_index : null,
+            copy_total: t.copy_total > 1 ? t.copy_total : null,
+
             source: "whatsapp",
 
             created_at: stamp,
@@ -1018,7 +1028,87 @@ function buildDocuments(payload, userList = users, refs = null) {
             };
         });
 
-    return { tasklist, items, logs, skipped, workDate, message, tasksDocs };
+    return {
+        tasklist, items, logs, skipped, workDate, message, tasksDocs,
+        delivery: deliverySummary(items)
+    };
+
+}
+
+
+// ------------------------------------------------------------
+// DELIVERY SUMMARY  (who got a sticky note and who did not)
+// A person "received" tasks when at least one of their tasks was queued
+// for them. A task held for review is invisible to the assignee, so a
+// person whose every task is held, or who maps to no PMT user, received
+// nothing. Someone with only some tasks held is listed as "partly held".
+// ------------------------------------------------------------
+function deliverySummary(items) {
+
+    const people = new Map();
+
+    for (const i of items) {
+
+        const key = i.assignee_user_id || `name:${normName(i.assignee_name)}`;
+
+        if (!people.has(key)) {
+            people.set(key, {
+                name: i.assignee_pmt_name || i.assignee_name || "(no name)",
+                total: 0,
+                delivered: 0,
+                held: 0,
+                reasons: []
+            });
+        }
+
+        const p = people.get(key);
+
+        p.total += 1;
+
+        if (!i.needs_review && i.assignee_user_id) {
+            p.delivered += 1;
+            continue;
+        }
+
+        p.held += 1;
+
+        const why = i.assignee_user_id
+            ? (i.review_reasons || [])[0]
+            : (i.review_reasons || []).find(r => /assignee|name/i.test(r)) || "No PMT user for this name";
+
+        if (why && !p.reasons.includes(why)) p.reasons.push(why);
+
+    }
+
+    const all = [...people.values()];
+    const received = all.filter(p => p.delivered > 0);
+    const notReceived = all.filter(p => p.delivered === 0);
+    const partlyHeld = received.filter(p => p.held > 0);
+
+    const short = (s) => (s.length > 90 ? s.slice(0, 87) + "..." : s);
+
+    const why = (p) => p.reasons.slice(0, 2).map(short).join(" / ") || "needs review";
+
+    let text =
+        `Sticky notes: ${received.length} ${received.length === 1 ? "person" : "people"} received tasks, ` +
+        `${notReceived.length} could not.`;
+
+    if (notReceived.length) {
+        text += " Did not receive: " +
+            notReceived.map(p => `${p.name} (${p.held} held: ${why(p)})`).join("; ") + ".";
+    }
+
+    if (partlyHeld.length) {
+        text += " Some tasks held for: " +
+            partlyHeld.map(p => `${p.name} (${p.held} of ${p.total} held: ${why(p)})`).join("; ") + ".";
+    }
+
+    return {
+        received: received.map(p => p.name),
+        not_received: notReceived.map(p => ({ name: p.name, held: p.held, reasons: p.reasons })),
+        partly_held: partlyHeld.map(p => ({ name: p.name, held: p.held, of: p.total, reasons: p.reasons })),
+        text
+    };
 
 }
 
@@ -1095,7 +1185,7 @@ async function persist(payload) {
 
     const refs = await loadReferences((payload.parsed_tasklist || {}).tasks || []);
 
-    const { tasklist, items, logs, skipped, workDate, message, tasksDocs } =
+    const { tasklist, items, logs, skipped, workDate, message, tasksDocs, delivery } =
         buildDocuments(payload, users, refs);
 
     // 0. raw message row
@@ -1249,6 +1339,7 @@ async function persist(payload) {
         logs_inserted: logged,
         needs_review: items.filter(i => i.needs_review).length,
         queued: items.filter(i => !i.needs_review).length,
+        delivery: delivery,
         work_date: workDate
     };
 
@@ -1271,7 +1362,7 @@ async function saveTasklist(payload) {
             log("Dry run: could not re-check ids against PMT:", error.message);
         }
 
-        const { tasklist, items, skipped, logs } = buildDocuments(payload, users, refs);
+        const { tasklist, items, skipped, logs, delivery } = buildDocuments(payload, users, refs);
 
         log("DRY RUN, would write:");
         log(`  ${MESSAGES}: 1 row`);
@@ -1287,6 +1378,8 @@ async function saveTasklist(payload) {
                 `${(i.deliverable_name || "-").slice(0, 30).padEnd(30)} | ${i.status}`
             );
         });
+
+        log("  " + delivery.text);
 
         return { dry_run: true, tasks_in_message: items.length };
 
@@ -1324,6 +1417,9 @@ async function saveTasklist(payload) {
             (summary.tasks_already_stored ? `, ${summary.tasks_already_stored} already stored` : "") +
             `, ${summary.queued} queued for the assignee, ${summary.needs_review} need review (work date ${summary.work_date})`
         );
+
+        // who got a sticky note and who did not, by name
+        log(summary.delivery.text);
 
         return { stored: true, ...summary };
 
@@ -1472,6 +1568,7 @@ module.exports = {
     close,
     saveTasklist,
     buildDocuments,
+    deliverySummary,
     resolveAssignee,
     assigneeNames,
     loadUsers,

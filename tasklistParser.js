@@ -442,6 +442,64 @@ function splitCommaDeliverables(line) {
 
 
 // ------------------------------------------------------------
+// QUANTITY = ONE ENTRY PER UNIT
+// "TFP Premium - 2 Minimalist" is two sticky notes, each "1 Minimalist",
+// not one note that says "2 Minimalist". Only a count (2 to 10) that
+// opens a segment after the client / project is expanded; the first
+// segment, a lone number ("TFP reviews - 10") and a count of 1 are left
+// alone. The units carry copy_index / copy_total so the store can tell
+// them apart (their text is identical).
+// ------------------------------------------------------------
+const MAX_QUANTITY_SPLIT = 10;
+
+const QUANTITY_SEGMENT_RE = /^(\d{1,2})\s+(\p{L}[\p{L}\s/&]*)$/u;
+
+function singularLastWord(text) {
+
+    return text.replace(/(\p{L}+)(\s*)$/u, (all, word, tail) => {
+
+        const plural = word.length > 4 && /[^s]s$/i.test(word) && !/(is|us)$/i.test(word);
+
+        return (plural ? word.slice(0, -1) : word) + tail;
+
+    });
+
+}
+
+function expandQuantity(line) {
+
+    const bulletMatch = line.match(BULLET_RE);
+    const bullet = bulletMatch ? bulletMatch[0] : "";
+    const segments = line.slice(bullet.length).split(/\s+[-–—]\s+/);
+
+    const hits = [];
+
+    for (let i = 1; i < segments.length; i++) {
+
+        const m = segments[i].trim().match(QUANTITY_SEGMENT_RE);
+
+        if (m && Number(m[1]) >= 2 && Number(m[1]) <= MAX_QUANTITY_SPLIT) {
+            hits.push({ i, count: Number(m[1]), what: m[2].trim() });
+        }
+
+    }
+
+    // two counts in one line ("2 reels - 3 carousels") is not a shape to guess at
+    if (hits.length !== 1) return [{ text: line, index: 1, total: 1 }];
+
+    const { i, count, what } = hits[0];
+
+    const copy = segments.slice();
+    copy[i] = `1 ${singularLastWord(what)}`;
+
+    const text = bullet + copy.join(" - ");
+
+    return Array.from({ length: count }, (_, k) => ({ text, index: k + 1, total: count }));
+
+}
+
+
+// ------------------------------------------------------------
 // ASSIGNEE HEADER, ONE OR SEVERAL PEOPLE
 //   "Shubham"   "Aniket, Vaishnavi"   "Aniket / Shubham"   "Nutan & Sanjana"
 //   "Shraddha Manali" (two known first names)   "*Bold wrapped*"
@@ -623,12 +681,20 @@ function parseTaskList(text, assignees = []) {
         // a header with several names gives every one of them the task
         for (const piece of splitCommaDeliverables(line)) {
 
-            for (const assignee of currentAssignees) {
+            // "2 Minimalist" becomes two entries
+            for (const unit of expandQuantity(piece)) {
 
-                tasks.push({
-                    assignee: assignee,
-                    ...parseTaskLine(piece)
-                });
+                for (const assignee of currentAssignees) {
+
+                    tasks.push({
+                        assignee: assignee,
+                        ...parseTaskLine(unit.text),
+                        ...(unit.total > 1
+                            ? { copy_index: unit.index, copy_total: unit.total }
+                            : {})
+                    });
+
+                }
 
             }
 

@@ -537,3 +537,77 @@ test("an ambiguous or guessed-client task is still held for review", async () =>
     assert.equal(i.status, "needs_review");
     assert.equal(i.project_unconfirmed, false);
 });
+
+
+// ---------------------------------------------------------------
+// "2 Minimalist" = two sticky notes
+// ---------------------------------------------------------------
+
+test("'2 Minimalist' is stored as two tasks, once even when delivered again", async () => {
+    const db = liveDb();
+    const text = "Content Team\nRatnesh\n- TFP Premium - 2 Minimalist";
+
+    await store.persist(payloadFor(text));
+
+    const items = db.all("tasklist_items");
+    assert.equal(items.length, 2);
+    assert.deepEqual(items.map(i => [i.copy_index, i.copy_total]), [[1, 2], [2, 2]]);
+    assert.notEqual(items[0].dedupe_key, items[1].dedupe_key);
+    assert.ok(db.all("nlp_match_logs").every(l => l.decision !== "duplicate_line"));
+
+    await store.persist(payloadFor(text));
+    assert.equal(db.all("tasklist_items").length, 2, "a re-delivery adds nothing");
+});
+
+test("a normal line keeps the same dedupe key and no copy numbers", async () => {
+    const db = liveDb();
+    await store.persist(payloadFor(GOOD));
+    const [item] = db.all("tasklist_items");
+    assert.equal(item.copy_index, null);
+    assert.equal(item.copy_total, null);
+});
+
+
+// ---------------------------------------------------------------
+// the delivery summary line
+// ---------------------------------------------------------------
+
+test("delivery summary names who received tasks and who could not", () => {
+    const item = (name, id, review, why) => ({
+        assignee_name: name, assignee_pmt_name: id ? name + " X" : null, assignee_user_id: id,
+        needs_review: review, review_reasons: why ? [why] : []
+    });
+
+    const d = store.deliverySummary([
+        item("Krishna", "u1", false),
+        item("Krishna", "u1", false),
+        item("Sakshi", "u2", false),
+        item("Sakshi", "u2", true, "No matching project in the database"),
+        item("Krupali", "u3", true, "Ambiguous project: A / A"),
+        item("Krupali", "u3", true, "Ambiguous project: A / A"),
+        item("Nobody", null, true, "Assignee not found")
+    ]);
+
+    assert.deepEqual(d.received, ["Krishna X", "Sakshi X"]);
+    assert.deepEqual(d.not_received.map(p => p.name), ["Krupali X", "Nobody"]);
+    assert.deepEqual(d.partly_held.map(p => [p.name, p.held, p.of]), [["Sakshi X", 1, 2]]);
+    assert.match(d.text, /2 people received tasks, 2 could not/);
+    assert.match(d.text, /Did not receive: Krupali X \(2 held: Ambiguous project: A \/ A\); Nobody/);
+    assert.match(d.text, /Some tasks held for: Sakshi X \(1 of 2 held/);
+});
+
+test("persist reports the delivery summary and the log line is printed", async () => {
+    liveDb();
+    const lines = [];
+    const orig = console.log;
+    console.log = (...a) => lines.push(a.join(" "));
+
+    try {
+        const result = await store.saveTasklist(payloadFor(GOOD));
+        assert.equal(result.delivery.received.length, 1);
+    } finally {
+        console.log = orig;
+    }
+
+    assert.ok(lines.some(l => /Sticky notes: 1 person received tasks, 0 could not/.test(l)));
+});

@@ -111,3 +111,24 @@ test("an unknown name in a bold multi-name header still gets its tasks, with a w
     assert.deepStrictEqual(r.tasks.map(t => t.assignee).sort(), ["Aniket", "Newperson"]);
     assert.ok(r.warnings.some(w => /Newperson/.test(w)));
 });
+
+test("a count of 2 or more makes one entry per unit, each '1 <thing>'", () => {
+    const tasks = parse(["- TFP Premium - 2 Minimalist"]);
+    assert.strictEqual(tasks.length, 2);
+    assert.deepStrictEqual(tasks.map(t => t.deliverable_name), ["1 Minimalist", "1 Minimalist"]);
+    assert.deepStrictEqual(tasks.map(t => [t.copy_index, t.copy_total]), [[1, 2], [2, 2]]);
+});
+
+test("a count works together with the comma split, and plurals become singular", () => {
+    const tasks = parse(["TFP premium scripting - 1 Reel, 1 infographic, 2 Minimalist", "TFP premium scripting - 3 Carousels"]);
+    assert.deepStrictEqual(tasks.map(t => t.deliverable_name),
+        ["1 Reel", "1 infographic", "1 Minimalist", "1 Minimalist", "1 Carousel", "1 Carousel", "1 Carousel"]);
+    assert.ok(tasks.slice(0, 2).every(t => t.copy_total === undefined));
+});
+
+test("a count of 1, a lone number, or two counts in one line are not split", () => {
+    assert.strictEqual(parse(["- TFP Premium - 1 Minimalist"]).length, 1);
+    assert.strictEqual(parse(["TFP reviews- 10"]).length, 1);
+    assert.strictEqual(parse(["- TFP Premium - 2 Reels - 3 Carousels"]).length, 1);
+    assert.strictEqual(parse(["- Invesco Concept IEP PPT - Sizes 1,000 pcs"]).length, 1);
+});
