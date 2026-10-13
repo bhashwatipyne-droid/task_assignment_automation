@@ -65,6 +65,11 @@ const TYPE_WORDS = new Set([
 
 const TYPE_STEMS = new Set([...TYPE_WORDS].map(stem));
 
+const LANGUAGE_TOKENS = new Set([
+    "hindi", "marathi", "gujarati", "kannada", "tamil", "telugu", "bengali",
+    "malayalam", "punjabi", "odia", "urdu", "assamese"
+]);
+
 
 // ------------------------------------------------------------
 // LOAD LEXICON
@@ -691,7 +696,13 @@ function resolveLine(rawLine) {
 
         const q = toTokens(seg, phrases);
 
-        let projects = rank(q, "project", clientSet);
+        // a language name ("kannada", "hindi") means a translation job:
+        // let "translation" count as a word of the line when ranking projects
+        const forProjects = q.some(t => LANGUAGE_TOKENS.has(t)) && !q.includes("translation")
+            ? q.concat("translation")
+            : q;
+
+        let projects = rank(forProjects, "project", clientSet);
         let dels = rank(q, "deliverable", clientSet);
 
         // client given but nothing good under it: try sibling brands
@@ -815,8 +826,11 @@ function resolveLine(rawLine) {
         // one that explains more of the words.
         if (segments.length === 1 && pOk && dOk) {
 
-            // the deliverable already lives under that project
-            if (d.entity.project_id === p.entity.id) {
+            // the deliverable already lives under that project (and is a
+            // specific match: one shared word such as "pharma" is the
+            // project's own word, not a deliverable, and would tie with
+            // every other "pharma" deliverable)
+            if (d.entity.project_id === p.entity.id && d.raw >= 0.85) {
                 return "deliverable";
             }
 
@@ -1131,9 +1145,21 @@ function resolveLine(rawLine) {
     const distinctive = (row) =>
         altSource.q.filter(t => !TYPE_STEMS.has(t) && row.entity.toks.includes(t));
 
+    // a language ("kannada", "hindi") or the word "translation" in the line
+    // points at the project that is a translation one over a project that is not
+    const wantsTranslation =
+        toTokens(rawLine).some(t => t === "translation" || LANGUAGE_TOKENS.has(t));
+
     const dominant =
         rows.length > 1 &&
         (() => {
+            if (
+                wantsTranslation &&
+                rows[0].entity.toks.includes("translation") &&
+                !rows[1].entity.toks.includes("translation")
+            ) {
+                return true;
+            }
             const a = distinctive(rows[0]);
             const b = distinctive(rows[1]);
             return a.some(t => !b.includes(t)) && !b.some(t => !a.includes(t));

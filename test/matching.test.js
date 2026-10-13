@@ -183,9 +183,13 @@ test("a runner-up that only shares a generic word does not make the project ambi
     assert.ok(!t.review_reasons.some(r => /^Ambiguous project/.test(r)), t.review_reasons.join("; "));
 });
 
-test("two booklet projects with only 'booklet' to go on are still ambiguous", () => {
-    const [t] = parse(["Amfi booklet - kannada"]);
+test("two booklet projects with only 'booklet' to go on are still ambiguous; a language picks the translation one", () => {
+    const [t] = parse(["Amfi booklet"]);
     assert.ok(t.review_reasons.some(r => /^Ambiguous project/.test(r)));
+
+    const [k] = parse(["Amfi booklet - kannada"]);
+    assert.match(k.project_name, /Translation/);
+    assert.ok(!k.review_reasons.some(r => /^Ambiguous project/.test(r)), k.review_reasons.join("; "));
 });
 
 test("a full deliverable name that exists once in PMT needs no confirmation; a generic one still does", () => {
@@ -205,4 +209,14 @@ test("'BBNP' is Baroda BNP Paribas, named in the text (not guessed)", () => {
     assert.strictEqual(t.client_name, "Baroda BNP Paribas");
     assert.strictEqual(t.client_source, "name in text");
     assert.ok(!t.review_reasons.some(r => /guessed/.test(r)), t.review_reasons.join("; "));
+});
+
+test("a plural deliverable followed by a count makes that many entries", () => {
+    const tasks = parse(["Bajaj One pagers 7"]);
+    assert.strictEqual(tasks.length, 7);
+    assert.ok(tasks.every(t => /One pager$/.test(t.raw_line)));
+    assert.deepStrictEqual(tasks.map(t => t.copy_index), [1, 2, 3, 4, 5, 6, 7]);
+    // a singular label with a number is not a quantity
+    assert.strictEqual(parse(["- Senior Citizen - Creative 2 (Infographic)"]).length, 1);
+    assert.strictEqual(parse(["Phase 2"]).length, 1);
 });

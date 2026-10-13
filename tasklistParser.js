@@ -491,6 +491,10 @@ function splitCommaDeliverables(line) {
 // ------------------------------------------------------------
 const MAX_QUANTITY_SPLIT = 10;
 
+// "<words ending in a letter> <count>" at the end of a line or segment. A
+// dash or colon before the number ("TFP reviews- 10") is not read as a quantity.
+const TRAILING_QUANTITY_RE = /^(.*\p{L})\s+(\d{1,2})$/u;
+
 const QUANTITY_SEGMENT_RE = /^(\d{1,2})\s+(\p{L}[\p{L}\s/&]*)$/u;
 
 function singularLastWord(text) {
@@ -520,6 +524,40 @@ function expandQuantity(line) {
         if (m && Number(m[1]) >= 2 && Number(m[1]) <= MAX_QUANTITY_SPLIT) {
             hits.push({ i, count: Number(m[1]), what: m[2].trim() });
         }
+
+    }
+
+    // no leading count: a count AFTER a plural word ("Bajaj One pagers 7",
+    // "TFP reviews- 10") also means that many entries. A singular word with a
+    // number ("Creative 2", "Phase 2") is a label, not a quantity.
+    if (hits.length === 0) {
+
+        const last = segments.length - 1;
+
+        const m = segments[last].trim().match(TRAILING_QUANTITY_RE);
+
+        if (m) {
+
+            const count = Number(m[2]);
+
+            const lastWord = (m[1].match(/(\p{L}+)$/u) || [])[1] || "";
+
+            const plural = lastWord.length > 3 && /[^s]s$/i.test(lastWord) && !/(is|us)$/i.test(lastWord);
+
+            if (plural && count >= 2 && count <= MAX_QUANTITY_SPLIT) {
+
+                const copy = segments.slice();
+                copy[last] = singularLastWord(m[1].trim());
+
+                const text = bullet + copy.join(" - ");
+
+                return Array.from({ length: count }, (_, k) => ({ text, index: k + 1, total: count }));
+
+            }
+
+        }
+
+        return [{ text: line, index: 1, total: 1 }];
 
     }
 
