@@ -132,3 +132,17 @@ test("a count of 1, a lone number, or two counts in one line are not split", () 
     assert.strictEqual(parse(["- TFP Premium - 2 Reels - 3 Carousels"]).length, 1);
     assert.strictEqual(parse(["- Invesco Concept IEP PPT - Sizes 1,000 pcs"]).length, 1);
 });
+
+test("identical text from two different lines is kept, the same line typed twice is not", () => {
+    const tasks = parse([
+        "TFP premium scripting - 1 Carousel, data analysis SMI",
+        "TFP premium scripting - 1 minimalist, data analysis SMI"
+    ]);
+    const smi = tasks.filter(t => /data analysis smi/i.test(t.raw_line));
+    assert.strictEqual(smi.length, 2);
+    assert.deepStrictEqual(smi.map(t => t.dup_index), [undefined, 2]);
+
+    const twice = parse(["- TFP Premium - 1 IG, 1 Minimalist", "- TFP Premium - 1 IG, 1 Minimalist"]);
+    // a literal repeat of a line is still the same entries (the store drops it)
+    assert.ok(twice.filter(t => t.dup_index).every(t => t.dup_index >= 2));
+});

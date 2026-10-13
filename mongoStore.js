@@ -142,7 +142,7 @@ function nowIso() {
 }
 
 
-function dedupeKey(workDate, assignee, rawLine, copyIndex, copyTotal) {
+function dedupeKey(workDate, assignee, rawLine, copyIndex, copyTotal, dupIndex) {
 
     const norm = (rawLine || "")
         .toLowerCase()
@@ -155,6 +155,10 @@ function dedupeKey(workDate, assignee, rawLine, copyIndex, copyTotal) {
     const parts = [workDate, (assignee || "").toLowerCase(), norm];
 
     if (copyTotal > 1) parts.push(`#${copyIndex}`);
+
+    // the same text from a DIFFERENT line of the message (2nd, 3rd...);
+    // the first one keeps the plain key, so a re-sent message never duplicates it
+    if (dupIndex > 1) parts.push(`dup${dupIndex}`);
 
     return crypto
         .createHash("sha1")
@@ -745,7 +749,7 @@ function buildDocuments(payload, userList = users, refs = null) {
 
     tasks.forEach((t, i) => {
 
-        const key = dedupeKey(workDate, t.assignee, t.raw_line, t.copy_index, t.copy_total);
+        const key = dedupeKey(workDate, t.assignee, t.raw_line, t.copy_index, t.copy_total, t.dup_index);
 
         const baseLog = {
             message_id: payload.message_id,
@@ -932,6 +936,7 @@ function buildDocuments(payload, userList = users, refs = null) {
             // "2 Minimalist" becomes two tasks: 1 of 2, 2 of 2 (null otherwise)
             copy_index: t.copy_total > 1 ? t.copy_index : null,
             copy_total: t.copy_total > 1 ? t.copy_total : null,
+            dup_index: t.dup_index > 1 ? t.dup_index : null,
 
             source: "whatsapp",
 

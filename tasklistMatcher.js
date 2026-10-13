@@ -1053,7 +1053,10 @@ function resolveLine(rawLine) {
         result.project_id &&
         alts.length > 1 &&
         alts[0].project === result.project_name &&
-        alts[0].score - alts[1].score < 0.15
+        alts[0].score - alts[1].score < 0.15 &&
+        // two PMT projects with the very same name and client are one project
+        // to a person (a duplicate record), not a real choice to review
+        !(alts[0].project === alts[1].project && alts[0].client === alts[1].client)
     ) {
 
         result.review_reasons.push(

@@ -611,3 +611,24 @@ test("persist reports the delivery summary and the log line is printed", async (
 
     assert.ok(lines.some(l => /Sticky notes: 1 person received tasks, 0 could not/.test(l)));
 });
+
+test("two lines that split into the same text are both stored, and a re-send adds nothing", async () => {
+    const db = liveDb();
+    const text = "Content Team\nRatnesh\n- TFP Premium - 1 IG, data analysis SMI\n- TFP Premium - 1 Minimalist, data analysis SMI";
+
+    await store.persist(payloadFor(text));
+    const smi = db.all("tasklist_items").filter(i => /data analysis smi/i.test(i.raw_line));
+    assert.equal(smi.length, 2);
+    assert.notEqual(smi[0].dedupe_key, smi[1].dedupe_key);
+
+    const before = db.all("tasklist_items").length;
+    await store.persist(payloadFor(text));
+    assert.equal(db.all("tasklist_items").length, before);
+});
+
+test("two PMT projects with the same name are not an 'ambiguous project'", async () => {
+    const db = liveDb();
+    await store.persist(payloadFor("Content Team\nSakshi\n- Invesco concept PPT Aggressive Hybrid - Data Analysis SMI"));
+    const [item] = db.all("tasklist_items");
+    assert.ok(!(item.review_reasons || []).some(r => /^Ambiguous project/.test(r)), JSON.stringify(item.review_reasons));
+});

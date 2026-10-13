@@ -569,6 +569,7 @@ function parseTaskList(text, assignees = []) {
     const team = detectTeam(text);
 
     const tasks = [];
+    const splitSeen = new Map();
     const calls = [];
     const warnings = [];
 
@@ -679,19 +680,46 @@ function parseTaskList(text, assignees = []) {
 
 
         // a header with several names gives every one of them the task
-        for (const piece of splitCommaDeliverables(line)) {
+        const pieces = splitCommaDeliverables(line);
+
+        for (const piece of pieces) {
 
             // "2 Minimalist" becomes two entries
             for (const unit of expandQuantity(piece)) {
 
                 for (const assignee of currentAssignees) {
 
+                    // Two different lines can split into the same text
+                    // ("1 Carousel, data analysis SMI" and "1 minimalist, data
+                    // analysis SMI" both give "... - data analysis SMI"). The
+                    // first keeps its plain key; a later one from ANOTHER
+                    // line gets dup_index 2, 3... so it is not dropped as a
+                    // repeat. The same line typed twice is still a repeat.
+                    let dup = null;
+
+                    if (pieces.length > 1 && unit.total === 1) {
+
+                        const sig = assignee.toLowerCase() + "|" +
+                            unit.text.replace(BULLET_RE, "").replace(/\s+/g, " ").trim().toLowerCase();
+
+                        const seen = splitSeen.get(sig);
+
+                        if (!seen) {
+                            splitSeen.set(sig, { line: i, count: 1 });
+                        } else if (seen.line !== i) {
+                            seen.count += 1;
+                            dup = seen.count;
+                        }
+
+                    }
+
                     tasks.push({
                         assignee: assignee,
                         ...parseTaskLine(unit.text),
                         ...(unit.total > 1
                             ? { copy_index: unit.index, copy_total: unit.total }
-                            : {})
+                            : {}),
+                        ...(dup ? { dup_index: dup } : {})
                     });
 
                 }
