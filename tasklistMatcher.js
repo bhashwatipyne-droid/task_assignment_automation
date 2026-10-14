@@ -358,20 +358,30 @@ function rank(qToks, kind, allowedClients) {
                 ? 0.70 * recall + 0.30 * precision
                 : 0.50 * recall + 0.50 * precision;
 
+        // The line is exactly this project's name ("Bajaj mappings" for the
+        // project "Bajaj Mappings"). A one-word name can never reach MIN_MASS,
+        // so without this it ranks below a longer project that merely repeats
+        // the word ("... Mapping ... and mapping_A4") and gets held as weak.
+        const exact =
+            kind === "project" &&
+            recall >= 0.999 &&
+            precision >= 0.999;
+
         out.push({
             entity: e,
             score: score + (kind === "project" ? recencyPrior(e.upd) : 0),
             raw: score,
             mass: eHit,
             recall,
-            precision
+            precision,
+            exact
         });
 
     }
 
     // a candidate with too little evidence behind it ("ICICI ETF" for a text that only
     // says "ETF") must not outrank one that is actually supported
-    const supported = r => (r.mass >= MIN_MASS ? 1 : 0);
+    const supported = r => (r.mass >= MIN_MASS || r.exact ? 1 : 0);
 
     out.sort((a, b) => supported(b) - supported(a) || b.score - a.score);
 
@@ -426,7 +436,7 @@ function coverage(qToks, tokLists) {
 
 
 const strongProject = (r) =>
-    r && r.raw >= PROJECT_MIN_SCORE && r.mass >= MIN_MASS;
+    r && r.raw >= PROJECT_MIN_SCORE && (r.mass >= MIN_MASS || r.exact === true);
 
 const strongDeliverable = (r) =>
     r && r.raw >= DELIVERABLE_MIN_SCORE && r.mass >= MIN_MASS;
@@ -1165,10 +1175,20 @@ function resolveLine(rawLine) {
             return a.some(t => !b.includes(t)) && !b.some(t => !a.includes(t));
         })();
 
+    // The best project is a live one and the runner-up is finished, scrapped
+    // or on hold: a person asking for "changes" means the live project.
+    // Only the "Ambiguous project" hold is lifted; weak matches stay held.
+    const liveBeatsClosed =
+        rows.length > 1 &&
+        rows[0].entity.id === result.project_id &&
+        rows[0].entity.status === "Active" &&
+        rows.slice(1).every(r => r.entity.status !== "Active");
+
     if (
         result.project_id &&
         alts.length > 1 &&
         !dominant &&
+        !liveBeatsClosed &&
         alts[0].project === result.project_name &&
         alts[0].score - alts[1].score < 0.15 &&
         // two PMT projects with the very same name and client are one project

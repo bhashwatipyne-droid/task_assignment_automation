@@ -220,3 +220,14 @@ test("a plural deliverable followed by a count makes that many entries", () => {
     assert.strictEqual(parse(["- Senior Citizen - Creative 2 (Infographic)"]).length, 1);
     assert.strictEqual(parse(["Phase 2"]).length, 1);
 });
+
+test("a line that is exactly a one-word project name picks that project, not a longer one repeating the word", () => {
+    const [t] = parse(["Bajaj mappings"]);
+    assert.strictEqual(t.project_name, "Bajaj Mappings");
+    assert.ok(!t.review_reasons.some(r => /^Ambiguous project|^Weak project/.test(r)), t.review_reasons.join("; "));
+});
+
+test("two live projects that both fit the line stay held for review", () => {
+    const [t] = parse(["Absl calendar changes"]);
+    assert.ok(t.review_reasons.some(r => /^Ambiguous project/.test(r)), t.review_reasons.join("; "));
+});
