@@ -16,7 +16,7 @@ const CLIENT_ALIASES = {
     "Invesco": ["invesco"],
     "Bandhan": ["bandhan"],
     "Thefinpedia": ["thefinpedia", "the finpedia", "tfp"],
-    "Franklin Templeton": ["franklin templeton", "ft"],
+    "Franklin Templeton": ["franklin templeton", "franklin", "ft"],
     "FT Sapphire SIF": ["ft sapphire"],
     "Bajaj Finserv AMC": ["bajaj finserv", "bajaj"],
     "Nippon": ["nippon"],
