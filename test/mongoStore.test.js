@@ -162,7 +162,7 @@ test("a tie between clients goes to review", async () => {
     const db = liveDb();
     await store.persist(payloadFor(`Content Team
 Harshal
-- Franklin US Equity IFSC Fund - Campaign - Script`));
+- US Equity IFSC Fund - Campaign - Script`));
     const [item] = db.all("tasklist_items");
     assert.equal(item.status, "needs_review");
 });
