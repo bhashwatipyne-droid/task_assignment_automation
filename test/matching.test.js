@@ -231,3 +231,19 @@ test("two live projects that both fit the line stay held for review", () => {
     const [t] = parse(["Absl calendar changes"]);
     assert.ok(t.review_reasons.some(r => /^Ambiguous project/.test(r)), t.review_reasons.join("; "));
 });
+
+test("a PPT line settles a tie on the PPT project, not on the video one", () => {
+    const [t] = parse(["ABSL India Growth fund PPT review"]);
+    assert.strictEqual(t.project_name, "ABSL India Growth Fund - story & design for ppt");
+    assert.ok(!t.review_reasons.some(r => /^Ambiguous project/.test(r)), t.review_reasons.join("; "));
+});
+
+test("a storyboard / shoot AV line is not given to a ppt project that scores a little higher", () => {
+    const [t] = parse(["ABSL India Growth Shoot AV storyboard - Delivery today"]);
+    assert.strictEqual(t.project_name, "ABSL India Growth Fund Explainer Video");
+});
+
+test("a line that names no kind of work still goes to review on a real tie", () => {
+    const [t] = parse(["Absl calendar changes"]);
+    assert.ok(t.review_reasons.some(r => /^Ambiguous project/.test(r)), t.review_reasons.join("; "));
+});

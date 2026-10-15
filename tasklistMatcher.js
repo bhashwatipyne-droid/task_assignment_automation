@@ -65,6 +65,25 @@ const TYPE_WORDS = new Set([
 
 const TYPE_STEMS = new Set([...TYPE_WORDS].map(stem));
 
+// The kind of work a line asks for. Used only to settle a near-tie between two
+// projects of the same client: "storyboard / shoot AV" belongs to the video
+// project, not to the "story & design for ppt" one.
+const KIND_GROUPS = {
+    deck: ["ppt", "pptx", "deck", "presentation", "slide"],
+    video: ["video", "av", "storyboard", "shoot", "tvc", "animation", "explainer"],
+    social: ["reel", "carousel", "post", "ig", "instagram", "static"]
+};
+
+const KIND_OF = new Map();
+
+for (const [kind, ws] of Object.entries(KIND_GROUPS)) {
+    ws.forEach(w => KIND_OF.set(stem(w), kind));
+}
+
+const KIND_TIE_MARGIN = 0.15;
+const KIND_CONTRADICTION_MARGIN = 0.25;
+const KIND_MIN_SCORE = 0.3;
+
 const LANGUAGE_TOKENS = new Set([
     "hindi", "marathi", "gujarati", "kannada", "tamil", "telugu", "bengali",
     "malayalam", "punjabi", "odia", "urdu", "assamese"
@@ -530,6 +549,66 @@ function clientFromPrefix(text) {
 }
 
 
+// The kinds of work a text talks about ("deck", "video", "social").
+function kindsIn(tokens) {
+
+    const found = new Set();
+
+    tokens.forEach(t => {
+        const k = KIND_OF.get(t);
+        if (k) found.add(k);
+    });
+
+    return found;
+
+}
+
+
+// Among the projects that are close to the best one, return the single project
+// whose NAME is about a kind of work the line asks for, when no other close
+// project is. Returns null (keep the best score) when it is not clear-cut.
+function pickByWorkKind(projectRows, rawLine) {
+
+    const top = projectRows[0];
+
+    if (!top || top.raw < KIND_MIN_SCORE) return null;
+
+    const lineKinds = kindsIn(toTokens(rawLine));
+
+    if (lineKinds.size === 0) return null;
+
+    const fitsLine = (r) =>
+        Array.from(kindsIn(r.entity.toks)).some(k => lineKinds.has(k));
+
+    // the best project is about a different kind of work than the line asks
+    // for ("story & design for ppt" for a "storyboard / shoot AV" line)
+    const topKinds = kindsIn(top.entity.toks);
+    const topContradicts = topKinds.size > 0 && !fitsLine(top);
+
+    const margin = topContradicts ? KIND_CONTRADICTION_MARGIN : KIND_TIE_MARGIN;
+
+    const fits = projectRows
+        .slice(0, 4)
+        .filter(r =>
+            top.raw - r.raw < margin &&
+            r.raw >= KIND_MIN_SCORE &&
+            fitsLine(r)
+        );
+
+    if (fits.length === 0) return null;
+
+    // projects that do not fit are no rivals: the choice is among the fits
+    // only, and two fits that score alike are still a real tie for a person
+    if (fits.length > 1 && fits[0].raw - fits[1].raw < 0.05) return null;
+
+    // the best project fits and so does a rival: nothing separates them
+    if (fits.includes(top) && fits.length > 1) return null;
+
+    return fits[0];
+
+}
+
+
 // ------------------------------------------------------------
 // MAIN: RESOLVE ONE LINE
 // ------------------------------------------------------------
@@ -893,6 +972,7 @@ function resolveLine(rawLine) {
     let projectIdx = roles.indexOf("project");
 
     let chosenProject = null;
+    let kindPicked = false;
     let projectText = null;
     let deliverableParts = [];
     let dbDeliverable = null;
@@ -942,6 +1022,16 @@ function resolveLine(rawLine) {
 
         chosenProject = evals[projectIdx].projects[0];
         projectText = evals[projectIdx].seg;
+
+        // two projects of one client within a hair of each other: if the line
+        // asks for a kind of work that only one of them is about, that one wins
+        const byKind = pickByWorkKind(evals[projectIdx].projects, rawLine);
+
+        if (byKind) {
+            kindPicked = true;
+            chosenProject = byKind;
+        }
+
         result.confidence.project = Number(Math.min(1, chosenProject.raw).toFixed(2));
 
     }
@@ -1188,6 +1278,7 @@ function resolveLine(rawLine) {
         result.project_id &&
         alts.length > 1 &&
         !dominant &&
+        !kindPicked &&
         !liveBeatsClosed &&
         alts[0].project === result.project_name &&
         alts[0].score - alts[1].score < 0.15 &&
