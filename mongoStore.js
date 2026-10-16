@@ -425,11 +425,11 @@ async function refreshLexicon(force = false) {
         const [projects, deliverables, clients] = await Promise.all([
             db.collection("projects").find(
                 {},
-                { projection: { _id: 0, id: 1, name: 1, client_id: 1, status: 1, hidden: 1, duplicate_of: 1, created_at: 1, updated_at: 1 } }
+                { projection: { _id: 0, id: 1, name: 1, client_id: 1, status: 1, hidden: 1, duplicate_of: 1, start_date: 1, end_date: 1, created_at: 1, updated_at: 1 } }
             ).toArray(),
             db.collection("deliverables").find(
                 {},
-                { projection: { _id: 0, id: 1, name: 1, project_id: 1, created_at: 1, updated_at: 1 } }
+                { projection: { _id: 0, id: 1, name: 1, project_id: 1, type: 1, start_dt: 1, end_dt: 1, created_at: 1, updated_at: 1 } }
             ).toArray(),
             db.collection("clients").find({}, { projection: { _id: 0, id: 1, name: 1 } }).toArray()
         ]);

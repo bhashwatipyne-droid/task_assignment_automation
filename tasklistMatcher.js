@@ -84,6 +84,44 @@ const KIND_TIE_MARGIN = 0.15;
 const KIND_CONTRADICTION_MARGIN = 0.25;
 const KIND_MIN_SCORE = 0.3;
 
+// ---- deliverable TYPE (the PMT "type" of a deliverable) -------------------
+// "AV" is a video, "ppt" is a presentation. Whether the project / deliverable
+// being considered actually HAS that type is used only to settle close calls.
+const TYPE_RULES = [
+    ["Long Video", /\b(av|a\.v|avs|video|videos|film|films|tvc|explainer|animated|animation|shoot|storyboard)\b/],
+    ["Reel / Short Video", /\b(reel|reels|short|shorts|video|videos)\b/],
+    ["Teaser", /\bteasers?\b/],
+    ["Carousel", /\bcarousels?\b/],
+    ["Presentation (PPT) - Per Slide", /\b(ppts?|pptx|decks?|presentations?|slides?)\b/],
+    ["One Pager / Infographic", /\b(one ?pagers?|onepagers?|infographics?)\b/],
+    ["Two Pager", /\b(two ?pagers?|2 ?pagers?|leaflets?)\b/],
+    ["Emailers", /\b(emailers?|mailers?)\b/],
+    ["Brochure", /\bbrochures?\b/],
+    ["Booklet", /\bbooklets?\b/],
+    ["Newsletters", /\bnewsletters?\b/],
+    ["GIF", /\bgifs?\b/],
+    ["Poster", /\bposters?\b/],
+    ["Minimalist", /\bminimali(st|stic)\b/],
+    ["Data Updation", /\b(updation|data update|data updation)\b/]
+];
+
+const TYPE_TIE_MARGIN = 0.12;
+
+// the PMT deliverable types a line asks for (empty = it says nothing about it)
+function typesAskedFor(rawLine) {
+
+    const text = String(rawLine || "").toLowerCase().replace(/_/g, " ");
+
+    const found = new Set();
+
+    for (const [type, re] of TYPE_RULES) {
+        if (re.test(text)) found.add(type);
+    }
+
+    return found;
+
+}
+
 const LANGUAGE_TOKENS = new Set([
     "hindi", "marathi", "gujarati", "kannada", "tamil", "telugu", "bengali",
     "malayalam", "punjabi", "odia", "urdu", "assamese"
@@ -183,7 +221,21 @@ function useLexicon(lex) {
         delSigCount.set(sig, (delSigCount.get(sig) || 0) + 1);
     }
 
+    // which deliverable types each project already has
+    const typesByProject = new Map();
+
+    for (const d of LEX.deliverables) {
+
+        if (!d.type) continue;
+
+        if (!typesByProject.has(d.project_id)) typesByProject.set(d.project_id, new Set());
+
+        typesByProject.get(d.project_id).add(d.type);
+
+    }
+
     state = {
+        typesByProject,
         delSigCount,
         clientById,
         phrasesByClient,
@@ -295,14 +347,25 @@ function equivalents(q) {
 }
 
 
-function recencyPrior(upd) {
+// Recent projects first. A project is as recent as the last date PMT has for it
+// or its deliverables (e.act); half a year ago counts for about half as much as
+// today, and a project nothing has happened in for 18 months is pushed down so a
+// 2019 project cannot win a close call against this year's. Projects without any
+// date are left neutral.
+const RECENCY_MAX = 0.10;
+const RECENCY_HALF_LIFE_DAYS = 180;
+const RECENCY_STALE_DAYS = 548;
+const RECENCY_STALE_PENALTY = 0.08;
 
-    if (!upd) return 0;
+function recencyPrior(e) {
 
-    return (
-        (upd - state.minUpd) /
-        Math.max(1, state.maxUpd - state.minUpd)
-    ) * 0.04;
+    if (!e || !e.act) return 0;
+
+    const ageDays = Math.max(0, (Date.now() - e.act) / 86400000);
+
+    const fresh = Math.pow(0.5, ageDays / RECENCY_HALF_LIFE_DAYS) * RECENCY_MAX;
+
+    return ageDays > RECENCY_STALE_DAYS ? fresh - RECENCY_STALE_PENALTY : fresh;
 
 }
 
@@ -388,7 +451,7 @@ function rank(qToks, kind, allowedClients) {
 
         out.push({
             entity: e,
-            score: score + (kind === "project" ? recencyPrior(e.upd) : 0),
+            score: score + (kind === "project" ? recencyPrior(e) : 0),
             raw: score,
             mass: eHit,
             recall,
@@ -605,6 +668,61 @@ function pickByWorkKind(projectRows, rawLine) {
     if (fits.includes(top) && fits.length > 1) return null;
 
     return fits[0];
+
+}
+
+
+// Close call between projects: the line asks for a type of deliverable ("AV" is a
+// video) and only one of the close projects actually has that type. Rows come
+// sorted best first (recency already counted in the score), so the first fit wins.
+function pickByDeliverableType(projectRows, rawLine) {
+
+    const top = projectRows[0];
+
+    if (!top || top.raw < KIND_MIN_SCORE) return null;
+
+    const asked = typesAskedFor(rawLine);
+
+    if (asked.size === 0 || state.typesByProject.size === 0) return null;
+
+    const has = (r) => {
+        const types = state.typesByProject.get(r.entity.id);
+        return !!types && Array.from(asked).some(t => types.has(t));
+    };
+
+    const close = projectRows
+        .slice(0, 5)
+        .filter(r => top.raw - r.raw < TYPE_TIE_MARGIN && r.raw >= KIND_MIN_SCORE);
+
+    const fits = close.filter(has);
+
+    if (fits.length === 0 || fits[0] === top) return null;
+
+    // the best project has no such deliverable but a close rival does
+    return fits[0];
+
+}
+
+
+// Close call between deliverables of the chosen project: the one whose type is
+// what the line asks for goes first.
+function preferDeliverableType(cands, rawLine) {
+
+    const asked = typesAskedFor(rawLine);
+
+    if (asked.size === 0 || cands.length < 2) return cands;
+
+    const top = cands[0];
+
+    const ok = (r) => !!r.entity.type && asked.has(r.entity.type);
+
+    if (ok(top)) return cands;
+
+    const fit = cands.find(r => ok(r) && top.raw - r.raw < TYPE_TIE_MARGIN && r.raw >= KIND_MIN_SCORE);
+
+    if (!fit) return cands;
+
+    return [fit, ...cands.filter(r => r !== fit)];
 
 }
 
@@ -1055,6 +1173,16 @@ function resolveLine(rawLine) {
             chosenProject = byKind;
         }
 
+        // still undecided: prefer the close project that really has the type of
+        // deliverable the line asks for ("AV" -> a project with a video)
+        else {
+
+            const byType = pickByDeliverableType(evals[projectIdx].projects, rawLine);
+
+            if (byType) chosenProject = byType;
+
+        }
+
         result.confidence.project = Number(Math.min(1, chosenProject.raw).toFixed(2));
 
     }
@@ -1152,6 +1280,8 @@ function resolveLine(rawLine) {
         if (chosenProject) {
             cands = cands.filter(c => c.entity.project_id === chosenProject.entity.id);
         }
+
+        cands = preferDeliverableType(cands, rawLine);
 
         if (strongDeliverable(cands[0])) {
 

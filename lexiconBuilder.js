@@ -51,6 +51,35 @@ function buildLexicon(projects, deliverables, clients, options = {}) {
     const stamp = (p) =>
         Date.parse(p.updated_at || p.created_at || "") || 0;
 
+    // When a project was REALLY worked on. created_at / updated_at are the day
+    // the data was imported, so they cannot tell a 2019 project from this
+    // month's: the planned dates of the project and of its deliverables can.
+    // 0 = unknown (the matcher stays neutral about those).
+    const NEXT_YEAR = Date.now() + 365 * 86400000;
+
+    const when = (v) => {
+        const t = Date.parse(v || "");
+        return Number.isFinite(t) && t > Date.UTC(2015, 0, 1) && t < NEXT_YEAR ? t : 0;
+    };
+
+    const activity = new Map();
+
+    const bump = (projectId, t) => {
+        if (projectId && t && t > (activity.get(projectId) || 0)) activity.set(projectId, t);
+    };
+
+    for (const p of projects) {
+        const target = liveById.has(p.id) ? p.id : canonicalOf.get(p.id);
+        bump(target, when(p.start_date));
+        bump(target, when(p.end_date));
+    }
+
+    for (const d of deliverables) {
+        const target = liveById.has(d.project_id) ? d.project_id : canonicalOf.get(d.project_id);
+        bump(target, when(d.start_dt));
+        bump(target, when(d.end_dt));
+    }
+
 
     // ------------------------------------------------------------
     // Project entities
@@ -70,6 +99,7 @@ function buildLexicon(projects, deliverables, clients, options = {}) {
             client_id: p.client_id || null,
             toks: toks,
             upd: stamp(p),
+            act: activity.get(p.id) || 0,
             status: p.status || "",
             alt: false
         });
@@ -110,6 +140,7 @@ function buildLexicon(projects, deliverables, clients, options = {}) {
                 client_id: canon.client_id || null,
                 toks: toks,
                 upd: stamp(canon),
+                act: activity.get(canon.id) || 0,
                 status: canon.status || "",
                 alt: true
             });
@@ -157,6 +188,8 @@ function buildLexicon(projects, deliverables, clients, options = {}) {
             project_id: projectId,
             client_id: project.client_id || null,
             toks: toks,
+            type: d.type || "",
+            act: when(d.end_dt) || when(d.start_dt) || 0,
             upd: Date.parse(d.updated_at || d.created_at || "") || 0
         });
 
