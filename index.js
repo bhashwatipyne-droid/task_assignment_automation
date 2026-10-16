@@ -555,9 +555,20 @@ async function startWhatsApp() {
                 const senderAltNumber =
                     extractNumberFromJid(senderAltJid);
 
+                // Compare the last 10 digits so "9096512396" and
+                // "919096512396" in MANAGER_JIDS both match (e.g. Vanshika
+                // Shah and Sakshi Agrawal, the two Content managers).
+                const last10 = n =>
+                    String(n || "").replace(/\D/g, "").slice(-10);
+
+                const managerLast10 =
+                    managerNumbers.map(last10);
+
                 const isManagerByNumber =
-                    managerNumbers.includes(senderNumber) ||
-                    managerNumbers.includes(senderAltNumber);
+                    (senderNumber !== "" &&
+                        managerLast10.includes(last10(senderNumber))) ||
+                    (senderAltNumber !== "" &&
+                        managerLast10.includes(last10(senderAltNumber)));
 
                 const fromManager =
                     message.key.fromMe === true ||
