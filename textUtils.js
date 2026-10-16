@@ -25,6 +25,11 @@ const SYN = {
 };
 
 
+// Fund-category compounds people write both as one word and as two
+// (multicap / multi cap, flexicap / flexi cap, midcap / mid cap ...)
+const COMPOUND_RE = /\b(multi|flexi|small|mid|large|micro)(cap|asset|factor)\b/g;
+
+
 function norm(text) {
 
     return (text || "")
@@ -34,6 +39,9 @@ function norm(text) {
         .replace(/&/g, " and ")
         .replace(/['’`]/g, "")
         .replace(/[^a-z0-9%]+/g, " ")
+        // "multicap" and "Multi Cap" are the same thing: always split the
+        // fund-category compounds so both spellings tokenize identically
+        .replace(COMPOUND_RE, "$1 $2")
         .trim();
 
 }

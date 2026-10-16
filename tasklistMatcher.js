@@ -821,6 +821,10 @@ function resolveLine(rawLine) {
 
         const votes = new Map();
 
+        // clients with a PROJECT that explains every word of its segment
+        // through a distinctive word (e.g. "BBNPP" -> "BBNPP ESG Fund ...")
+        const projectProof = new Set();
+
         for (const ev of evals) {
 
             const pool = [];
@@ -830,7 +834,18 @@ function resolveLine(rawLine) {
             });
 
             ev.projects.slice(0, 12).forEach(r => {
+
                 if (strongProject(r)) pool.push(r);
+
+                if (
+                    strongProject(r) &&
+                    r.entity.client_id &&
+                    r.precision >= 0.999 &&
+                    r.mass >= MIN_MASS
+                ) {
+                    projectProof.add(r.entity.client_id);
+                }
+
             });
 
             for (const r of pool) {
@@ -873,7 +888,15 @@ function resolveLine(rawLine) {
 
             result.client_name = client.name;
             result.client_id = client.id;
-            result.confidence.client = Number(Math.min(0.9, ranked[0][1]).toFixed(2));
+            let clientConf = Math.min(0.9, ranked[0][1]);
+
+            // only one client has any evidence, and a distinctive word of
+            // its project is in the line: no need to ask for confirmation
+            if (ranked.length === 1 && projectProof.has(client.id)) {
+                clientConf = Math.max(clientConf, 0.75);
+            }
+
+            result.confidence.client = Number(clientConf.toFixed(2));
             result.client_source = "inferred from database match";
 
             clientSet = new Set([client.id]);

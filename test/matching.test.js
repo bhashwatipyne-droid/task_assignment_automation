@@ -247,3 +247,18 @@ test("a line that names no kind of work still goes to review on a real tie", () 
     const [t] = parse(["Absl calendar changes"]);
     assert.ok(t.review_reasons.some(r => /^Ambiguous project/.test(r)), t.review_reasons.join("; "));
 });
+
+test("'multicap' and 'Multi Cap' are the same word for matching", () => {
+    const [a] = parse(["ITI multicap - Campaign"]);
+    const [b] = parse(["ITI multi cap - Campaign"]);
+    assert.match(a.project_name || "", /multi cap/i);
+    assert.strictEqual(a.project_name, b.project_name);
+    assert.strictEqual(a.needs_review, b.needs_review);
+});
+
+test("a distinctive project word that only one client has needs no client confirmation", () => {
+    const [t] = parse(["BBNPP - AV changes"]);
+    assert.match(t.client_name || "", /baroda/i);
+    assert.match(t.project_name || "", /BBNPP ESG/i);
+    assert.ok(!t.review_reasons.some(r => /guessed/i.test(r)), t.review_reasons.join("; "));
+});
