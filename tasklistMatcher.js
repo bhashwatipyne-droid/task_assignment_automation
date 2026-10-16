@@ -88,8 +88,12 @@ const KIND_MIN_SCORE = 0.3;
 // "AV" is a video, "ppt" is a presentation. Whether the project / deliverable
 // being considered actually HAS that type is used only to settle close calls.
 const TYPE_RULES = [
-    ["Long Video", /\b(av|a\.v|avs|video|videos|film|films|tvc|explainer|animated|animation|shoot|storyboard)\b/],
-    ["Reel / Short Video", /\b(reel|reels|short|shorts|video|videos)\b/],
+    // AV = animated video. PMT has no "animated video" type: it is one of the video
+    // types (long, short or teaser), so all of them count for AV / animation.
+    ["Long Video", /\b(av|avs|a\.v|video|videos|film|films|tvc|explainer|animated|animation|shoot)\b/],
+    ["Reel / Short Video", /\b(av|avs|a\.v|reel|reels|short|shorts|video|videos|animated|animation)\b/],
+    ["Teaser Short Video", /\b(av|avs|a\.v|teaser|teasers|animated|animation)\b/],
+    ["Video Storyboard", /\b(storyboard|storyboards|script)\b/],
     ["Teaser", /\bteasers?\b/],
     ["Carousel", /\bcarousels?\b/],
     ["Presentation (PPT) - Per Slide", /\b(ppts?|pptx|decks?|presentations?|slides?)\b/],
@@ -1512,5 +1516,6 @@ module.exports = {
     commaPhrases,
     isReady,
     lexiconInfo,
-    resolveLine
+    resolveLine,
+    typesAskedFor
 };

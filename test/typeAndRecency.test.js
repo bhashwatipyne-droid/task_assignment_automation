@@ -58,3 +58,11 @@ test("projects without any date are treated as neutral", () => {
     const r = resolveWith([P("A")], [D("d1", "A", "Launch Teaser", "Teaser")], "Bandhan Balanced Advantage Campaign - Launch Teaser");
     assert.equal(r.project_id, "A");
 });
+
+test("AV (animated video) counts as every video type, not as a storyboard or a deck", () => {
+    const rules = (line) => matcher.typesAskedFor(line);
+    const av = rules("Bandhan - AV");
+    assert.ok(av.has("Long Video") && av.has("Reel / Short Video") && av.has("Teaser Short Video"));
+    assert.ok(!av.has("Video Storyboard") && !av.has("Presentation (PPT) - Per Slide"));
+    assert.ok(rules("Animated video for NFO").has("Long Video"));
+});
