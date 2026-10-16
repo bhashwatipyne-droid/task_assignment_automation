@@ -24,6 +24,7 @@ const {
 
 // Direct MongoDB storage (replaces the n8n webhook)
 const store = require("./mongoStore");
+const { extractMessageText } = require("./messageText");
 const { useMongoAuthState } = require("./waAuthStore");
 const TEAM_ROSTER = require("./teamRoster.json");
 
@@ -174,14 +175,33 @@ app.use(express.json());
 app.get("/qr", (req, res, next) => qrPage.handler(req, res).catch(next));
 
 
-// Health check
+// Health check. "/" says the process is up; "/ready" is only 200 while the
+// WhatsApp socket is open and MongoDB is connected, so a broken listener
+// does not report itself as fine.
+function healthReport() {
+
+    return {
+        service: "WhatsApp PMT Listener",
+        whatsapp: waState,
+        mongodb: store.getDb() ? "connected" : "disconnected",
+        outbox_backlog: store.outboxCount(),
+        lexicon_built_at: (matcher.lexiconInfo() || {}).built_at || null
+    };
+
+}
+
 app.get("/", (req, res) => {
 
-    res.json({
-        status: "running",
-        service: "WhatsApp PMT Listener",
-        whatsapp: "listener active"
-    });
+    res.json({ status: "running", ...healthReport() });
+
+});
+
+app.get("/ready", (req, res) => {
+
+    const report = healthReport();
+    const ready = report.whatsapp === "open" && report.mongodb === "connected";
+
+    res.status(ready ? 200 : 503).json({ status: ready ? "ready" : "not ready", ...report });
 
 });
 
@@ -190,7 +210,55 @@ app.get("/", (req, res) => {
 // START WHATSAPP
 // ============================================================
 
+// One socket at a time. waState feeds /ready; reconnects back off (3s, 6s ...
+// up to 60s) and a second close event while one is already scheduled is ignored.
+let waState = "starting";
+let waStarting = false;
+let reconnectTimer = null;
+let reconnectAttempts = 0;
+let shuttingDown = false;
+
+function scheduleReconnect(minDelayMs = 3000) {
+
+    if (shuttingDown || reconnectTimer) return;
+
+    const delay = Math.min(60000, Math.max(minDelayMs, 3000 * 2 ** reconnectAttempts));
+
+    reconnectAttempts += 1;
+    waState = "reconnecting";
+
+    console.log(`Reconnecting in ${Math.round(delay / 1000)}s...`);
+
+    reconnectTimer = setTimeout(() => {
+
+        reconnectTimer = null;
+
+        startWhatsApp().catch(error => {
+            console.error("Reconnect failed:", error.message);
+            scheduleReconnect();
+        });
+
+    }, delay);
+
+}
+
+
 async function startWhatsApp() {
+
+    if (waStarting) return;
+    waStarting = true;
+
+    try {
+        await connectWhatsApp();
+    }
+    finally {
+        waStarting = false;
+    }
+
+}
+
+
+async function connectWhatsApp() {
 
     console.log("");
     console.log("========================================");
@@ -320,6 +388,9 @@ async function startWhatsApp() {
 
             if (connection === "open") {
 
+                waState = "open";
+                reconnectAttempts = 0;
+
                 qrPage.markLinked();
 
                 console.log("");
@@ -401,15 +472,14 @@ async function startWhatsApp() {
                 console.log("Status Code:", statusCode);
                 console.log("========================================");
 
+                waState = "closed";
+
                 if (shouldReconnect) {
 
-                    console.log("Reconnecting...");
-
-                    setTimeout(
-                        () => {
-                            startWhatsApp();
-                        },
-                        3000
+                    // another device took the session: wait longer instead
+                    // of fighting it every few seconds
+                    scheduleReconnect(
+                        statusCode === DisconnectReason.connectionReplaced ? 30000 : 3000
                     );
 
                 }
@@ -422,7 +492,7 @@ async function startWhatsApp() {
 
                     clearAuth()
                         .catch(() => {})
-                        .finally(() => setTimeout(() => startWhatsApp(), 3000));
+                        .finally(() => scheduleReconnect());
 
                 }
 
@@ -608,41 +678,7 @@ async function startWhatsApp() {
                 // EXTRACT MESSAGE TEXT
                 // ============================================
 
-                let text = "";
-
-                if (message.message.conversation) {
-
-                    text =
-                        message.message.conversation;
-
-                }
-
-                else if (message.message.extendedTextMessage) {
-
-                    text =
-                        message.message
-                            .extendedTextMessage
-                            .text;
-
-                }
-
-                else if (message.message.imageMessage?.caption) {
-
-                    text =
-                        message.message
-                            .imageMessage
-                            .caption;
-
-                }
-
-                else if (message.message.videoMessage?.caption) {
-
-                    text =
-                        message.message
-                            .videoMessage
-                            .caption;
-
-                }
+                const text = extractMessageText(message.message);
 
                 if (!text) {
 
@@ -1055,13 +1091,21 @@ store.init()
 // CLEAN SHUTDOWN
 // ============================================================
 
-process.on("SIGINT", async () => {
+async function shutdown(signal) {
+
+    if (shuttingDown) return;
+    shuttingDown = true;
 
     console.log("");
-    console.log("Shutting down...");
+    console.log(`${signal}: shutting down...`);
+
+    if (reconnectTimer) clearTimeout(reconnectTimer);
 
     await store.close();
 
     process.exit(0);
 
-});
+}
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));

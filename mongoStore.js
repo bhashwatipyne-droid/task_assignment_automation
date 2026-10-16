@@ -1191,18 +1191,20 @@ function deliverySummary(items) {
 // OUTBOX  (nothing is lost while MongoDB is unreachable)
 // ------------------------------------------------------------
 
-function writeOutbox(payload) {
+// Writes the file under a temporary name and renames it, so a crash or a full
+// disk never leaves half a payload that looks complete. Returns false when the
+// payload was NOT saved: callers must not tell anyone it is queued then.
+function writeOutboxFile(name, payload) {
 
     try {
 
         fs.mkdirSync(OUTBOX_DIR, { recursive: true });
 
-        const file = path.join(
-            OUTBOX_DIR,
-            `${(payload.message_id || newId()).replace(/[^\w-]/g, "_")}.json`
-        );
+        const file = path.join(OUTBOX_DIR, `${name.replace(/[^\w-]/g, "_")}.json`);
+        const temp = `${file}.tmp`;
 
-        fs.writeFileSync(file, JSON.stringify(payload));
+        fs.writeFileSync(temp, JSON.stringify(payload));
+        fs.renameSync(temp, file);
 
         log(`Saved to ${file}. It will be retried automatically.`);
 
@@ -1211,8 +1213,34 @@ function writeOutbox(payload) {
     }
 
     catch (error) {
-        log("Could not write outbox file:", error.message);
+        log("COULD NOT WRITE OUTBOX FILE (the data is NOT saved):", error.message);
         return false;
+    }
+
+}
+
+
+function writeOutbox(payload) {
+    return writeOutboxFile(payload.message_id || newId(), payload);
+}
+
+
+// A delete/edit seen while MongoDB is down is kept the same way and applied
+// once it is back (withdrawing is idempotent).
+function writeWithdrawEvent(messageId, reason) {
+    return writeOutboxFile(`withdraw-${messageId}`, { type: "withdraw", message_id: messageId, reason });
+}
+
+
+function outboxCount() {
+
+    try {
+        return fs.existsSync(OUTBOX_DIR)
+            ? fs.readdirSync(OUTBOX_DIR).filter(f => f.endsWith(".json")).length
+            : 0;
+    }
+    catch (error) {
+        return 0;
     }
 
 }
@@ -1232,7 +1260,18 @@ async function flushOutbox() {
 
             const payload = JSON.parse(fs.readFileSync(full, "utf8"));
 
-            await persist(payload);
+            if (payload.type === "withdraw") {
+
+                const outcome = await withdrawMessage(payload.message_id, payload.reason, false);
+
+                // still not connected: leave the file for the next round
+                if (outcome.error) throw new Error(outcome.error);
+
+            }
+
+            else {
+                await persist(payload);
+            }
 
             fs.unlinkSync(full);
 
@@ -1345,13 +1384,23 @@ async function persist(payload) {
 
         // Plain re-delivery or re-post: leave the task alone, but remember that
         // this message asserts it too, so deleting the older one keeps it.
-        const known = existing.source_message_ids || [existing.message_id];
-
-        if (!known.includes(doc.message_id)) {
+        // $addToSet is atomic: two reposts at once cannot overwrite each other
+        if (Array.isArray(existing.source_message_ids)) {
             await db.collection(ITEMS).updateOne(
                 { id: existing.id },
-                { $set: { source_message_ids: [...known, doc.message_id] } }
+                { $addToSet: { source_message_ids: doc.message_id } }
             );
+        }
+        else {
+            // item written before source_message_ids existed
+            const known = [existing.message_id];
+
+            if (!known.includes(doc.message_id)) {
+                await db.collection(ITEMS).updateOne(
+                    { id: existing.id },
+                    { $set: { source_message_ids: [...known, doc.message_id] } }
+                );
+            }
         }
 
     }
@@ -1473,11 +1522,13 @@ async function saveTasklist(payload) {
 
     if (!db) {
 
-        writeOutbox(payload);
+        const saved = writeOutbox(payload);
 
         scheduleRetry();
 
-        return { stored: false, queued_in_outbox: true };
+        return saved
+            ? { stored: false, queued_in_outbox: true }
+            : { stored: false, queued_in_outbox: false, error: "MongoDB is down and the outbox file could not be written" };
 
     }
 
@@ -1503,11 +1554,11 @@ async function saveTasklist(payload) {
 
         log("Write failed:", error.message);
 
-        writeOutbox(payload);
+        const saved = writeOutbox(payload);
 
         scheduleRetry();
 
-        return { stored: false, queued_in_outbox: true, error: error.message };
+        return { stored: false, queued_in_outbox: saved, error: error.message };
 
     }
 
@@ -1526,15 +1577,27 @@ async function saveTasklist(payload) {
 // message followed by a normal save of the new text (restoring unchanged
 // lines), which is done by the caller.
 
-async function withdrawMessage(messageId, reason = "message deleted in WhatsApp") {
+async function withdrawMessage(messageId, reason = "message deleted in WhatsApp", queueIfDown = true) {
 
     const none = { withdrawn: 0, kept_in_use: 0, kept_other_message: 0 };
 
     if (!messageId || isDryRun()) return none;
 
     if (!db) {
-        log(`Cannot withdraw ${messageId}: MongoDB is not connected.`);
-        return { ...none, error: "not connected" };
+
+        log(`Cannot withdraw ${messageId} yet: MongoDB is not connected.`);
+
+        // keep the delete/edit so it is applied when MongoDB is back
+        if (!queueIfDown) return { ...none, error: "not connected" };
+
+        const saved = writeWithdrawEvent(messageId, reason);
+
+        scheduleRetry();
+
+        return saved
+            ? { ...none, queued_in_outbox: true }
+            : { ...none, error: "not connected, and the outbox file could not be written" };
+
     }
 
     const found = new Map();
@@ -1548,15 +1611,30 @@ async function withdrawMessage(messageId, reason = "message deleted in WhatsApp"
 
     for (const item of found.values()) {
 
-        const sources = item.source_message_ids || [item.message_id];
-        const remaining = sources.filter(id => id !== messageId);
+        let remaining;
 
-        if (remaining.length) {
+        if (Array.isArray(item.source_message_ids)) {
 
+            // atomic: another message adding itself at the same moment is not undone
             await db.collection(ITEMS).updateOne(
                 { id: item.id },
-                { $set: { source_message_ids: remaining } }
+                { $pull: { source_message_ids: messageId } }
             );
+
+            const fresh = await db.collection(ITEMS).findOne({ id: item.id });
+
+            remaining = (fresh && fresh.source_message_ids) || [];
+
+            if (fresh) item.status = fresh.status;
+
+        }
+
+        else {
+            // item written before source_message_ids existed
+            remaining = [item.message_id].filter(id => id !== messageId);
+        }
+
+        if (remaining.length) {
 
             result.kept_other_message += 1;
             continue;
@@ -1652,6 +1730,7 @@ module.exports = {
     loadReferences,
     istDate,
     flushOutbox,
+    outboxCount,
     persist,
     withdrawMessage,
     workDateOf,

@@ -54,6 +54,11 @@ class Collection {
         Object.assign(doc, structuredClone(update.$set || {}));
         Object.entries(update.$inc || {}).forEach(([k, n]) => { doc[k] = (doc[k] || 0) + n; });
         Object.entries(update.$push || {}).forEach(([k, v]) => { doc[k] = [...(doc[k] || []), structuredClone(v)]; });
+        Object.entries(update.$addToSet || {}).forEach(([k, v]) => {
+            const list = doc[k] || [];
+            doc[k] = list.includes(v) ? list : [...list, structuredClone(v)];
+        });
+        Object.entries(update.$pull || {}).forEach(([k, v]) => { doc[k] = (doc[k] || []).filter(x => x !== v); });
         return { upsertedCount: upserted, modifiedCount: upserted ? 0 : 1 };
     }
 

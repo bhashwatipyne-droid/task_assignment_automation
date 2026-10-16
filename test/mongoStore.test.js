@@ -685,3 +685,74 @@ test("an empty database never replaces a good lexicon", async () => {
     assert.equal(await store.refreshLexicon(true), false);
     assert.equal(matcher.lexiconInfo().built_at, before);
 });
+
+
+// ---------------------------------------------------------------
+// outbox honesty, delete/edit while MongoDB is down
+// ---------------------------------------------------------------
+
+test("if the outbox file cannot be written, the result does not claim it is queued", async () => {
+    const db = liveDb();
+    db.failWrites = true;
+    fs.writeFileSync(OUTBOX, "not a folder");          // makes the outbox directory impossible
+
+    try {
+        const result = await store.saveTasklist(payloadFor(GOOD));
+        assert.equal(result.stored, false);
+        assert.equal(result.queued_in_outbox, false);
+    }
+    finally {
+        fs.rmSync(OUTBOX, { force: true });
+    }
+});
+
+test("the outbox never leaves a half-written file behind", async () => {
+    const db = liveDb();
+    db.failWrites = true;
+    await store.saveTasklist(payloadFor(GOOD));
+
+    const names = fs.readdirSync(OUTBOX);
+    assert.equal(names.length, 1);
+    assert.ok(names[0].endsWith(".json"));
+    assert.equal(store.outboxCount(), 1);
+    assert.doesNotThrow(() => JSON.parse(fs.readFileSync(path.join(OUTBOX, names[0]), "utf8")));
+});
+
+test("a delete seen while MongoDB is down is applied once it is back", async () => {
+    const db = liveDb();
+    const payload = payloadFor(GOOD);
+    await store.persist(payload);
+
+    store._useDatabaseForTest(null, USERS);               // MongoDB unreachable
+    const out = await store.withdrawMessage(payload.message_id);
+    assert.equal(out.queued_in_outbox, true);
+    assert.equal(db.all("tasklist_items")[0].status, "pending");
+
+    store._useDatabaseForTest(db, USERS);                 // MongoDB is back
+    await store.flushOutbox();
+
+    assert.equal(db.all("tasklist_items")[0].status, "withdrawn");
+    assert.equal(store.outboxCount(), 0);
+});
+
+test("source message ids are added and removed without losing the other messages", async () => {
+    const db = liveDb();
+    const a = payloadFor(GOOD);
+    const b = payloadFor(GOOD);
+    const c = payloadFor(GOOD);
+    await store.persist(a);
+    await store.persist(b);
+    await store.persist(c);
+    await store.persist(b);                                // a replay adds nothing twice
+
+    assert.deepEqual(db.all("tasklist_items")[0].source_message_ids, [a.message_id, b.message_id, c.message_id]);
+
+    await store.withdrawMessage(a.message_id);
+    assert.deepEqual(db.all("tasklist_items")[0].source_message_ids, [b.message_id, c.message_id]);
+    assert.notEqual(db.all("tasklist_items")[0].status, "withdrawn");
+
+    await store.withdrawMessage(b.message_id);
+    await store.withdrawMessage(c.message_id);
+    assert.equal(db.all("tasklist_items")[0].status, "withdrawn");
+    assert.deepEqual(db.all("tasklist_items")[0].source_message_ids, []);
+});
