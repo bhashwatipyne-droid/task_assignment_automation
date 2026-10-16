@@ -88,11 +88,10 @@ const KIND_MIN_SCORE = 0.3;
 // "AV" is a video, "ppt" is a presentation. Whether the project / deliverable
 // being considered actually HAS that type is used only to settle close calls.
 const TYPE_RULES = [
-    // AV = animated video. PMT has no "animated video" type: it is one of the video
-    // types (long, short or teaser), so all of them count for AV / animation.
-    ["Long Video", /\b(av|avs|a\.v|video|videos|film|films|tvc|explainer|animated|animation|shoot)\b/],
-    ["Reel / Short Video", /\b(av|avs|a\.v|reel|reels|short|shorts|video|videos|animated|animation)\b/],
-    ["Teaser Short Video", /\b(av|avs|a\.v|teaser|teasers|animated|animation)\b/],
+    // AV (animated video) is ALWAYS "Reel / Short Video" in PMT.
+    ["Reel / Short Video", /\b(av|avs|a\.v|reel|reels|short|shorts|animated|animation)\b/],
+    ["Long Video", /\b(video|videos|film|films|tvc|explainer|shoot)\b/],
+    ["Teaser Short Video", /\b(teaser|teasers)\b/],
     ["Video Storyboard", /\b(storyboard|storyboards|script)\b/],
     ["Teaser", /\bteasers?\b/],
     ["Carousel", /\bcarousels?\b/],
@@ -120,6 +119,12 @@ function typesAskedFor(rawLine) {
 
     for (const [type, re] of TYPE_RULES) {
         if (re.test(text)) found.add(type);
+    }
+
+    // AV / animated video is a short video, never a long one
+    if (/\b(av|avs|a\.v|animated|animation)\b/.test(text)) {
+        found.delete("Long Video");
+        found.delete("Teaser Short Video");
     }
 
     return found;

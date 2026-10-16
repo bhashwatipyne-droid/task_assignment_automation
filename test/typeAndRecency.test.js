@@ -32,7 +32,7 @@ test("AV picks the close project that has a video, not the one with only a carou
     const b = P("B", { start_date: "2026-10-01", end_date: "2026-10-30" });
     const r = resolveWith([a, b], [
         D("d1", "A", "Social Post", "Carousel", { end_dt: "2026-10-10" }),
-        D("d2", "B", "Launch Film", "Long Video", { end_dt: "2026-10-10" })
+        D("d2", "B", "Launch Film", "Reel / Short Video", { end_dt: "2026-10-10" })
     ], "Bandhan Balanced Advantage Campaign - AV");
     assert.equal(r.project_id, "B");
 });
@@ -40,7 +40,7 @@ test("AV picks the close project that has a video, not the one with only a carou
 test("the type decides between two deliverables of the project that score alike", () => {
     const r = resolveWith([P("A", { end_date: "2026-10-30" })], [
         D("d1", "A", "Festival Creative Hindi", "Carousel", { end_dt: "2026-10-10" }),
-        D("d2", "A", "Festival Creative Marathi", "Long Video", { end_dt: "2026-10-10" })
+        D("d2", "A", "Festival Creative Marathi", "Reel / Short Video", { end_dt: "2026-10-10" })
     ], "Bandhan Balanced Advantage Campaign - Festival Creative AV");
     assert.equal(r.db_match.deliverable_alternatives[0].id, "d2");
 });
@@ -48,7 +48,7 @@ test("the type decides between two deliverables of the project that score alike"
 test("a line that names no type is not pushed around by types", () => {
     const r = resolveWith([P("A", { end_date: "2026-10-30" })], [
         D("d1", "A", "Festival Creative Hindi", "Carousel", { end_dt: "2026-10-10" }),
-        D("d2", "A", "Festival Creative Marathi", "Long Video", { end_dt: "2026-10-10" })
+        D("d2", "A", "Festival Creative Marathi", "Reel / Short Video", { end_dt: "2026-10-10" })
     ], "Bandhan Balanced Advantage Campaign - Festival Creative");
     assert.equal(r.project_id, "A");
     assert.equal(r.db_match.deliverable_alternatives[0].id, "d1");
@@ -59,10 +59,11 @@ test("projects without any date are treated as neutral", () => {
     assert.equal(r.project_id, "A");
 });
 
-test("AV (animated video) counts as every video type, not as a storyboard or a deck", () => {
-    const rules = (line) => matcher.typesAskedFor(line);
-    const av = rules("Bandhan - AV");
-    assert.ok(av.has("Long Video") && av.has("Reel / Short Video") && av.has("Teaser Short Video"));
-    assert.ok(!av.has("Video Storyboard") && !av.has("Presentation (PPT) - Per Slide"));
-    assert.ok(rules("Animated video for NFO").has("Long Video"));
+test("AV (animated video) is always Reel / Short Video", () => {
+    for (const line of ["Bandhan - AV", "Bandhan AV changes", "Animated video for NFO"]) {
+        const t = matcher.typesAskedFor(line);
+        assert.ok(t.has("Reel / Short Video"), line);
+        assert.ok(!t.has("Long Video") && !t.has("Video Storyboard"), line);
+    }
+    assert.ok(matcher.typesAskedFor("Shoot video").has("Long Video"));
 });
