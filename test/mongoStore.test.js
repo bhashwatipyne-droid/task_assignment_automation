@@ -718,6 +718,47 @@ test("the outbox never leaves a half-written file behind", async () => {
     assert.doesNotThrow(() => JSON.parse(fs.readFileSync(path.join(OUTBOX, names[0]), "utf8")));
 });
 
+test("an outbox file that is not valid JSON is quarantined at once, not retried forever", async () => {
+    const db = liveDb();
+    fs.mkdirSync(OUTBOX, { recursive: true });
+    fs.writeFileSync(path.join(OUTBOX, "broken.json"), "{ half a fi");
+    await store.saveTasklist(payloadFor(GOOD));                  // a healthy neighbour is unaffected
+    await store.flushOutbox();
+
+    assert.deepEqual(fs.readdirSync(path.join(OUTBOX, "failed")), ["broken.json"]);
+    assert.equal(store.outboxCount(), 0);                        // quarantined files are not "waiting"
+    assert.equal(store.outboxFailedCount(), 1);
+    assert.equal(db.all("tasklist_items").length, 1);
+});
+
+test("a payload that keeps failing for a non-connection reason is quarantined after the limit", async () => {
+    liveDb();
+    fs.mkdirSync(OUTBOX, { recursive: true });
+    fs.writeFileSync(path.join(OUTBOX, "bad.json"), JSON.stringify({ parsed_tasklist: { tasks: [null] } }));
+
+    // valid JSON that is not a tasklist: persist() throws a data error every time
+    for (let i = 0; i < 9; i++) await store.flushOutbox();
+    assert.equal(store.outboxCount(), 1, "still retried before the limit");
+
+    await store.flushOutbox();
+    assert.equal(store.outboxCount(), 0);
+    assert.equal(store.outboxFailedCount(), 1);
+});
+
+test("connection errors never push a payload towards quarantine", async () => {
+    const db = liveDb();
+    db.failWrites = true;                                         // "simulated Mongo outage" is not a data problem
+    await store.saveTasklist(payloadFor(GOOD));
+    db.failWrites = false;
+
+    for (let i = 0; i < 15; i++) {
+        db.failWrites = true;
+        await store.flushOutbox();
+    }
+    assert.equal(store.outboxCount(), 1);
+    assert.equal(store.outboxFailedCount(), 0);
+});
+
 test("a delete seen while MongoDB is down is applied once it is back", async () => {
     const db = liveDb();
     const payload = payloadFor(GOOD);

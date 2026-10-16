@@ -25,6 +25,7 @@ const {
 // Direct MongoDB storage (replaces the n8n webhook)
 const store = require("./mongoStore");
 const { extractMessageText } = require("./messageText");
+const groupGate = require("./groupGate");
 const { useMongoAuthState } = require("./waAuthStore");
 const TEAM_ROSTER = require("./teamRoster.json");
 
@@ -185,6 +186,7 @@ function healthReport() {
         whatsapp: waState,
         mongodb: store.getDb() ? "connected" : "disconnected",
         outbox_backlog: store.outboxCount(),
+        outbox_failed: store.outboxFailedCount(),
         lexicon_built_at: (matcher.lexiconInfo() || {}).built_at || null
     };
 
@@ -403,15 +405,11 @@ async function connectWhatsApp() {
 
 
                 // Allowed groups
-                console.log("Allowed Groups:");
+                const gateJids = groupGate.allowedJids();
 
-                const allowedGroups =
-                    (process.env.ALLOWED_GROUP_NAMES || "")
-                        .split(",")
-                        .map(normalizeGroupName)
-                        .filter(Boolean);
+                console.log(gateJids.length ? "Allowed Groups (by id):" : "Allowed Groups (by name):");
 
-                allowedGroups.forEach(group => {
+                (gateJids.length ? gateJids : groupGate.allowedNames()).forEach(group => {
                     console.log(`  - ${group}`);
                 });
 
@@ -580,19 +578,10 @@ async function connectWhatsApp() {
                 // ALLOWED GROUPS
                 // ============================================
 
-                const allowedGroups =
-                    (process.env.ALLOWED_GROUP_NAMES || "")
-                        .split(",")
-                        .map(normalizeGroupName)
-                        .filter(Boolean);
-
-                const normalizedGroupName =
-                    normalizeGroupName(groupName);
-
-                if (!allowedGroups.includes(normalizedGroupName)) {
+                if (!groupGate.isGroupAllowed(remoteJid, groupName)) {
 
                     console.log(
-                        `Ignoring unauthorized group: ${groupName}`
+                        `Ignoring unauthorized group: ${groupName} (${remoteJid})`
                     );
                     continue;
 
@@ -982,6 +971,11 @@ async function connectWhatsApp() {
 
                     // delivery / read receipts and everything else
                     if (!key.id || !(key.remoteJid || "").endsWith("@g.us")) {
+                        continue;
+                    }
+
+                    // same group rule as for new messages (when group ids are set)
+                    if (!groupGate.isUpdateAllowed(key.remoteJid)) {
                         continue;
                     }
 

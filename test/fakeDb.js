@@ -26,7 +26,13 @@ function matches(doc, filter) {
 class Collection {
     constructor(name, db) { this.name = name; this.db = db; this.docs = []; this.indexes = []; }
 
-    _guard() { if (this.db.failWrites) throw new Error("simulated Mongo outage"); }
+    _guard() {
+        if (this.db.failWrites) {
+            const error = new Error("simulated Mongo outage");
+            error.name = "MongoNetworkError";            // what the real driver throws when Atlas is unreachable
+            throw error;
+        }
+    }
 
     find(filter) {
         const rows = this.docs.filter(d => matches(d, filter)).map(d => structuredClone(d));

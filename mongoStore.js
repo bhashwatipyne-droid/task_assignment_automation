@@ -83,7 +83,16 @@ const MESSAGES = "whatsapp_messages";
 const TASKS = "tasks";
 const LOGS = "nlp_match_logs";
 
-const OUTBOX_DIR = path.join(__dirname, "outbox");
+// OUTBOX_DIR can point at a persistent disk so queued payloads survive a redeploy
+const OUTBOX_DIR = process.env.OUTBOX_DIR
+    ? path.resolve(process.env.OUTBOX_DIR)
+    : path.join(__dirname, "outbox");
+
+// A payload that keeps failing for a reason other than MongoDB being down is
+// moved to outbox/failed after this many attempts, so it stops being retried
+// forever and is easy to find.
+const OUTBOX_MAX_ATTEMPTS = Number(process.env.OUTBOX_MAX_ATTEMPTS) || 10;
+const outboxFailures = new Map();
 
 const USER_CACHE_MS = 10 * 60 * 1000;
 const RETRY_MS = 5 * 60 * 1000;
@@ -1232,6 +1241,35 @@ function writeWithdrawEvent(messageId, reason) {
 }
 
 
+// MongoDB being unreachable is expected and temporary - it must never push a
+// payload towards quarantine. Anything else (bad data, a bug) will not fix itself.
+function isConnectivityError(error) {
+
+    const text = `${error && error.name} ${error && error.code} ${error && error.message}`;
+
+    return /MongoNetwork|MongoServerSelection|MongoNotConnected|MongoTopology|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|not connected|topology|socket/i.test(text);
+
+}
+
+
+function outboxFailedCount() {
+
+    try {
+
+        const failedDir = path.join(OUTBOX_DIR, "failed");
+
+        return fs.existsSync(failedDir)
+            ? fs.readdirSync(failedDir).filter(f => f.endsWith(".json")).length
+            : 0;
+
+    }
+    catch (error) {
+        return 0;
+    }
+
+}
+
+
 function outboxCount() {
 
     try {
@@ -1275,12 +1313,47 @@ async function flushOutbox() {
 
             fs.unlinkSync(full);
 
+            outboxFailures.delete(file);
+
             log(`Outbox: stored ${file}`);
 
         }
 
         catch (error) {
-            log(`Outbox: ${file} still failing (${error.message})`);
+
+            // a file that is not valid JSON can never succeed: quarantine at once
+            const unreadable = error instanceof SyntaxError;
+
+            const failures = isConnectivityError(error) && !unreadable
+                ? 0
+                : (outboxFailures.get(file) || 0) + 1;
+
+            outboxFailures.set(file, failures);
+
+            if (unreadable || failures >= OUTBOX_MAX_ATTEMPTS) {
+
+                try {
+
+                    const failedDir = path.join(OUTBOX_DIR, "failed");
+
+                    fs.mkdirSync(failedDir, { recursive: true });
+                    fs.renameSync(full, path.join(failedDir, file));
+                    outboxFailures.delete(file);
+
+                    log(`Outbox: ${file} failed ${failures} times (${error.message}) and was moved to ${failedDir}. Look at it by hand.`);
+
+                }
+
+                catch (moveError) {
+                    log(`Outbox: ${file} failed ${failures} times and could not be moved:`, moveError.message);
+                }
+
+            }
+
+            else {
+                log(`Outbox: ${file} still failing (${error.message})`);
+            }
+
         }
 
     }
@@ -1731,6 +1804,7 @@ module.exports = {
     istDate,
     flushOutbox,
     outboxCount,
+    outboxFailedCount,
     persist,
     withdrawMessage,
     workDateOf,
