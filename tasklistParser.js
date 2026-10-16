@@ -87,7 +87,8 @@ function stripMentions(text) {
     return (text || "").replace(/(^|\s)@\S+/g, " ").replace(/\s+/g, " ").trim();
 }
 
-const CALLS_RE = /^calls?\s*(for\s+(today|tomorrow))?\s*:?$/i;
+// "Calls for today", "Meetings for today" etc.: a list of calls/meetings, not a person
+const CALLS_RE = /^(calls?|meetings?)\s*(for\s+(today|tomorrow))?\s*:?$/i;
 
 
 function escapeRegex(text) {
@@ -708,7 +709,8 @@ function parseTaskList(text, assignees = []) {
             }
 
             calls.push({
-                topic: topic,
+                // WhatsApp pastes leave invisible word-joiners before the text
+                topic: topic.replace(/[\u2060\u200b-\u200d\ufeff]/g, "").trim(),
                 owner: owner,
                 raw_line: line
             });

@@ -53,3 +53,28 @@ test("a full-name assignee line with a test account is parsed", () => {
     assert.equal(parsed.tasks[0].assignee, "Bhashwati Testing");
     assert.deepEqual(parsed.warnings, []);
 });
+
+
+test("'Meetings for today' is a calls section, not an assignee", () => {
+    const text = `*Content Team*
+
+Sakshi
+BBNPP - AV changes
+
+Meetings for today
+- ⁠interviews - sakshi`;
+
+    const parsed = parseTaskList(text, ["Sakshi", "Vanshika"]);
+
+    assert.ok(
+        !parsed.tasks.some(t => /meetings/i.test(t.assignee || "")),
+        "Meetings for today must not become an assignee"
+    );
+    assert.ok(
+        !(parsed.warnings || []).some(w => /Meetings for today/i.test(w)),
+        "no 'not in ASSIGNEES' warning for the meetings heading"
+    );
+    assert.equal(parsed.calls.length, 1);
+    assert.equal(parsed.calls[0].topic, "interviews");
+    assert.equal(parsed.calls[0].owner, "Sakshi");
+});
