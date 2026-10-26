@@ -26,6 +26,7 @@ const {
 const store = require("./mongoStore");
 const { extractMessageText } = require("./messageText");
 const groupGate = require("./groupGate");
+const { REPLACED, reconnectDelay, nextReplacedStreak } = require("./reconnectPolicy");
 const { useMongoAuthState } = require("./waAuthStore");
 const TEAM_ROSTER = require("./teamRoster.json");
 
@@ -219,17 +220,32 @@ let waStarting = false;
 let reconnectTimer = null;
 let reconnectAttempts = 0;
 let shuttingDown = false;
+let replacedStreak = 0;
+let openedAt = 0;
 
-function scheduleReconnect(minDelayMs = 3000) {
+// statusCode: why the last connection closed (reconnectPolicy.js)
+function scheduleReconnect(statusCode) {
 
     if (shuttingDown || reconnectTimer) return;
 
-    const delay = Math.min(60000, Math.max(minDelayMs, 3000 * 2 ** reconnectAttempts));
+    const delay = reconnectDelay(statusCode, reconnectAttempts, replacedStreak);
 
     reconnectAttempts += 1;
     waState = "reconnecting";
 
-    console.log(`Reconnecting in ${Math.round(delay / 1000)}s...`);
+    if (statusCode === REPLACED) {
+
+        console.log(
+            "Another copy of this listener (or another device) took the WhatsApp " +
+            "login. Not fighting it: the new copy keeps it and this one is stopped " +
+            "by the deploy."
+        );
+
+    }
+
+    const mins = delay >= 120000 ? `${Math.round(delay / 60000)} min` : `${Math.round(delay / 1000)}s`;
+
+    console.log(`Reconnecting in ${mins}...`);
 
     reconnectTimer = setTimeout(() => {
 
@@ -392,6 +408,7 @@ async function connectWhatsApp() {
 
                 waState = "open";
                 reconnectAttempts = 0;
+                openedAt = Date.now();
 
                 qrPage.markLinked();
 
@@ -472,13 +489,19 @@ async function connectWhatsApp() {
 
                 waState = "closed";
 
+                replacedStreak = nextReplacedStreak(
+                    replacedStreak,
+                    statusCode,
+                    openedAt ? Date.now() - openedAt : 0
+                );
+
+                openedAt = 0;
+
                 if (shouldReconnect) {
 
-                    // another device took the session: wait longer instead
-                    // of fighting it every few seconds
-                    scheduleReconnect(
-                        statusCode === DisconnectReason.connectionReplaced ? 30000 : 3000
-                    );
+                    // another copy took the session: wait a long time instead
+                    // of taking it back (the two would trade it every 30s)
+                    scheduleReconnect(statusCode);
 
                 }
 
