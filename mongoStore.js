@@ -969,6 +969,13 @@ function buildDocuments(payload, userList = users, refs = null) {
             db_deliverable: t.db_deliverable || null,
             deliverable_id: deliverableId,
 
+            // PMT deliverable type for the Work Sheet when no deliverable of that
+            // name exists yet: the matched deliverable's own type ("database") or
+            // the closing word of the line, e.g. "... > Carousel" ("line")
+            deliverable_type: t.deliverable_type || null,
+            type_source: t.type_source || null,
+            type_candidates: t.type_candidates || [],
+
             action: t.action || null,
             notes: t.notes || null,
             slot: t.slot || null,

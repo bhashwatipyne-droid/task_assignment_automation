@@ -87,8 +87,15 @@ function stripMentions(text) {
     return (text || "").replace(/(^|\s)@\S+/g, " ").replace(/\s+/g, " ").trim();
 }
 
-// "Calls for today", "Meetings for today" etc.: a list of calls/meetings, not a person
-const CALLS_RE = /^(calls?|meetings?)\s*(for\s+(today|tomorrow))?\s*:?$/i;
+// "Calls for today", "Meetings:", "Interview:" etc.: a list of calls/meetings, not a person
+const CALLS_RE = /^(calls?|meetings?|interviews?)\s*(for\s+(today|tomorrow))?\s*:?$/i;
+
+// "ICICI > Multi Asset Campaign > Client Campaign Discussion > Ratnesh | Vanshika":
+// an arrow separates the parts of a call the way a dash does
+const CALL_ARROW_RE = /\s*(?:-+>|[>›»→])+\s*/;
+
+// who is on a call: "Team", "Vanshika", "Ratnesh | Vanshika", "Vanshika & Krupali"
+const CALL_OWNER_SPLIT_RE = /\s*(?:\||\/|&|,|\+|\band\b)\s*/i;
 
 
 function escapeRegex(text) {
@@ -279,6 +286,9 @@ function parseTaskLine(rawLine) {
                 project_id: m.project_id,
                 project_text: m.project_text,
                 deliverable_name: m.deliverable_name,
+                deliverable_type: m.deliverable_type || null,
+                type_source: m.type_source || null,
+                type_candidates: m.type_candidates || [],
                 action: m.action,
                 notes: m.notes,
                 slot: m.slot,
@@ -512,6 +522,12 @@ function singularLastWord(text) {
 
 function expandQuantity(line) {
 
+    // "TFP Premium > Diwali Campaign > Top Mutual Funds 5": on an arrow line the
+    // middle is an article title, and a number ending it is part of the title
+    if (/\s*(?:-+>|[>›»→])\s*/.test(line)) {
+        return [{ text: line, index: 1, total: 1 }];
+    }
+
     const bulletMatch = line.match(BULLET_RE);
     const bullet = bulletMatch ? bulletMatch[0] : "";
     const segments = line.slice(bullet.length).split(/\s+[-–—]\s+/);
@@ -653,6 +669,7 @@ function parseTaskList(text, assignees = []) {
 
     let currentAssignees = [];
     let inCalls = false;
+    let callKind = "call";
 
 
     const knownAssignee = (name) =>
@@ -673,9 +690,12 @@ function parseTaskList(text, assignees = []) {
 
 
         // "Calls for today:" starts the calls section
-        if (CALLS_RE.test(cleanFormatting(line))) {
+        const sectionMatch = cleanFormatting(line).match(CALLS_RE);
+
+        if (sectionMatch) {
 
             inCalls = true;
+            callKind = sectionMatch[1].toLowerCase().replace(/s$/, "");
             currentAssignees = [];
             continue;
 
@@ -684,34 +704,53 @@ function parseTaskList(text, assignees = []) {
 
         // ----------------------------------------------------
         // CALLS SECTION:  "- ICICI TVC - Vanshika"
+        //                 "- ICICI > Multi Asset > Client Discussion > Ratnesh | Vanshika"
         // ----------------------------------------------------
 
         if (inCalls) {
 
             const entry = stripBullet(line);
-            const parts = splitTopLevel(entry);
+
+            const arrowParts = entry.split(CALL_ARROW_RE).filter(Boolean);
+
+            const arrowed = arrowParts.length >= 2;
+
+            const parts = arrowed ? arrowParts : splitTopLevel(entry);
 
             let topic = entry;
-            let owner = null;
+            let owners = [];
 
             if (parts.length >= 2) {
 
                 const last = parts[parts.length - 1];
 
-                owner =
-                    knownAssignee(last) ||
-                    (/^team$/i.test(last) ? "Team" : null);
+                const names = last
+                    .split(CALL_OWNER_SPLIT_RE)
+                    .map(name => cleanFormatting(name))
+                    .filter(Boolean)
+                    .map(name =>
+                        knownAssignee(name) ||
+                        (/^team$/i.test(name) ? "Team" : null)
+                    );
 
-                topic = owner
-                    ? parts.slice(0, -1).join(" - ")
-                    : entry;
+                // every name on the closing part must be someone known
+                if (names.length > 0 && names.every(Boolean)) {
+
+                    owners = Array.from(new Set(names));
+
+                    topic = parts.slice(0, -1).join(arrowed ? " > " : " - ");
+
+                }
 
             }
 
             calls.push({
                 // WhatsApp pastes leave invisible word-joiners before the text
                 topic: topic.replace(/[\u2060\u200b-\u200d\ufeff]/g, "").trim(),
-                owner: owner,
+                // first person (older readers use `owner`), everyone on it in `owners`
+                owner: owners.length ? owners.join(" | ") : null,
+                owners: owners,
+                kind: callKind,
                 raw_line: line
             });
 

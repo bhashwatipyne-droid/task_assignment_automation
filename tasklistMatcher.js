@@ -110,6 +110,79 @@ const TYPE_RULES = [
 
 const TYPE_TIE_MARGIN = 0.12;
 
+// ---- the TYPE written as the last part of a line --------------------------
+// "TFP Premium > Diwali Campaign > <article title> > Carousel": when no
+// deliverable of that name exists in PMT yet, the closing word still says what
+// kind of work it is. Only an exact phrase counts, so a title that merely
+// contains the word "reel" is never read as a type.
+//
+// "Data Research & Analysis" exists in PMT twice, "(Web)" and "(SMI)", and the
+// line does not say which. Set DEFAULT_DATA_RESEARCH_TYPE to one of them to
+// always use it; left null the type stays empty and the line says so
+// (type_candidates) instead of guessing.
+const DEFAULT_DATA_RESEARCH_TYPE = null;
+
+const DATA_RESEARCH_TYPES = [
+    "Data Research and Analysis (Web)",
+    "Data Research and Analysis (SMI)"
+];
+
+const SEGMENT_TYPES = [
+    [/^carousels?$/, "Carousel"],
+    [/^(reels?|short videos?|shorts?|avs?|animated videos?)$/, "Reel / Short Video"],
+    [/^(infographics?|one ?pagers?|one ?pager ?(\/|and)? ?infographics?|infographics? ?(\/|and)? ?one ?pagers?)$/, "One Pager / Infographic"],
+    [/^(two ?pagers?|2 ?pagers?)$/, "Two Pager"],
+    [/^minimali(st|stic)s?$/, "Minimalist"],
+    [/^gifs?$/, "GIF"],
+    [/^teasers?$/, "Teaser"],
+    [/^posters?$/, "Poster"],
+    [/^brochures?$/, "Brochure"],
+    [/^booklets?$/, "Booklet"],
+    [/^newsletters?$/, "Newsletters"],
+    [/^(emailers?|mailers?)$/, "Emailers"],
+    [/^long videos?$/, "Long Video"],
+    [/^(ppts?|pptx|presentations?|decks?)$/, "Presentation (PPT) - Per Slide"],
+    [/^(web ?based data|web data|web research|data research and analysis \(?web\)?)$/, "Data Research and Analysis (Web)"],
+    [/^(smi data|smi research|data research and analysis \(?smi\)?)$/, "Data Research and Analysis (SMI)"],
+    // "Campaign ideation" is a deliverable type; the plain form is the one with keywords
+    [/^campaign ideation( plan)?$/, "Campaign Ideation Plan (Includes Keywords)"]
+];
+
+const AMBIGUOUS_SEGMENT_TYPES = /^(data research and analysis|data analysis and research|data research|research and analysis)$/;
+
+// { type, candidates } for a closing part such as "Carousel", "Web Based Data"
+// or "Data Research & Analysis"; null when it is not a type
+function typeOfPart(part) {
+
+    const plain = String(part || "")
+        .toLowerCase()
+        .replace(/&/g, " and ")
+        .replace(/^\d+\s+/, "")
+        .replace(/\s+/g, " ")
+        .replace(/[.:]+$/, "")
+        .trim();
+
+    if (!plain) return null;
+
+    for (const [re, type] of SEGMENT_TYPES) {
+        if (re.test(plain)) return { type, candidates: [] };
+    }
+
+    if (AMBIGUOUS_SEGMENT_TYPES.test(plain)) {
+
+        return DEFAULT_DATA_RESEARCH_TYPE
+            ? { type: DEFAULT_DATA_RESEARCH_TYPE, candidates: [] }
+            : { type: null, candidates: DATA_RESEARCH_TYPES.slice() };
+
+    }
+
+    return null;
+
+}
+
+// ">" (also the typographic arrows) separates the parts of a line the way a dash does
+const ARROW_SPLIT_RE = /\s*(?:-+>|[>›»→])+\s*/;
+
 // the PMT deliverable types a line asks for (empty = it says nothing about it)
 function typesAskedFor(rawLine) {
 
@@ -756,6 +829,11 @@ function resolveLine(rawLine) {
         project_id: null,
         project_text: null,
         deliverable_name: null,
+        // PMT deliverable type: from the matched deliverable ("database") or from
+        // the closing word of the line ("line"); null when neither says
+        deliverable_type: null,
+        type_source: null,
+        type_candidates: [],
         action: null,
         notes: null,
         slot: null,
@@ -815,23 +893,64 @@ function resolveLine(rawLine) {
     // ---- action words (changes, review, ideation ...) -------
     const actions = [];
 
-    const keep = [];
+    const stripActions = (chunk) => {
 
-    text = text.replace(TYPE_RE, (m) => {
-        keep.push(m);
-        return "\uE000" + (keep.length - 1) + "\uE001";
-    });
+        const keep = [];
 
-    text = text.replace(ACTION_RE, (m) => {
-        actions.push(m.charAt(0).toUpperCase() + m.slice(1).toLowerCase());
-        return " ";
-    });
+        chunk = chunk.replace(TYPE_RE, (m) => {
+            keep.push(m);
+            return "\uE000" + (keep.length - 1) + "\uE001";
+        });
+
+        chunk = chunk.replace(ACTION_RE, (m) => {
+            actions.push(m.charAt(0).toUpperCase() + m.slice(1).toLowerCase());
+            return " ";
+        });
+
+        return chunk.replace(/\uE000(\d+)\uE001/g, (_, i) => keep[Number(i)]);
+
+    };
+
+    // "TFP Premium > Diwali Campaign > <title> > Carousel": the action ("Review",
+    // "Review & Changes") is the closing part. A long middle part is an article
+    // title and keeps every word ("5 Numbers to Review Before the New Year");
+    // short middle parts ("Pharma Review") are read as before.
+    const arrowParts = text.split(ARROW_SPLIT_RE);
+
+    const arrowed = arrowParts.length > 1;
+
+    if (arrowed) {
+
+        const last = arrowParts.length - 1;
+
+        text = arrowParts
+            .map((part, i) =>
+                i === last || part.trim().split(/\s+/).length <= 3
+                    ? tidy(stripActions(part))
+                    : part.trim()
+            )
+            .filter(Boolean)
+            .join(" > ");
+
+    }
+
+    else {
+
+        text = stripActions(text);
+
+    }
 
     if (actions.length) result.action = actions.join(" + ");
 
-    text = text.replace(/\uE000(\d+)\uE001/g, (_, i) => keep[Number(i)]);
-
     text = tidy(text);
+
+    // the closing part names the kind of work ("... > Carousel"); a matching
+    // deliverable in PMT, when there is one, decides the type instead (below)
+    const closingPart = arrowed
+        ? text.split(ARROW_SPLIT_RE).pop()
+        : text.split(/\s+[-\u2013\u2014]\s+|\s*[\u2013\u2014]\s*/).filter(Boolean).slice(1).pop();
+
+    const lineType = typeOfPart(closingPart);
 
 
     // ---- client from the start of the line -----------------
@@ -1328,6 +1447,29 @@ function resolveLine(rawLine) {
                 }));
 
         result.scores.deliverable = scoreOf(cands[0]);
+
+    }
+
+
+    // ---- deliverable type -----------------------------------
+    if (dbDeliverable && dbDeliverable.entity.type) {
+
+        result.deliverable_type = dbDeliverable.entity.type;
+        result.type_source = "database";
+
+    }
+
+    else if (lineType && lineType.type) {
+
+        result.deliverable_type = lineType.type;
+        result.type_source = "line";
+
+    }
+
+    else if (lineType) {
+
+        // "Data Research & Analysis": two PMT types fit, the line does not say which
+        result.type_candidates = lineType.candidates;
 
     }
 
