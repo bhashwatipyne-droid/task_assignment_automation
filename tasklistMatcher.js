@@ -117,10 +117,10 @@ const TYPE_TIE_MARGIN = 0.12;
 // contains the word "reel" is never read as a type.
 //
 // "Data Research & Analysis" exists in PMT twice, "(Web)" and "(SMI)", and the
-// line does not say which. Set DEFAULT_DATA_RESEARCH_TYPE to one of them to
-// always use it; left null the type stays empty and the line says so
-// (type_candidates) instead of guessing.
-const DEFAULT_DATA_RESEARCH_TYPE = null;
+// line does not say which. It is SMI almost every time (Web is only ever written
+// out as "Web Based Data"), so SMI is the default. Set this to null to leave the
+// type empty and list both in type_candidates instead.
+const DEFAULT_DATA_RESEARCH_TYPE = "Data Research and Analysis (SMI)";
 
 const DATA_RESEARCH_TYPES = [
     "Data Research and Analysis (Web)",

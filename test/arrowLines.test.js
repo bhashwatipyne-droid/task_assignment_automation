@@ -45,15 +45,16 @@ test("Campaign Ideation (2) gets the campaign ideation type and keeps the (2)", 
     assert.strictEqual(t.notes, "2");
 });
 
-test("Data Research & Analysis is not guessed between Web and SMI", () => {
+test("Data Research & Analysis is SMI; only Web Based Data is Web", () => {
     for (const closing of ["Data Research & Analysis", "Data Analysis and Research"]) {
         const t = one(`- TFP Premium > Diwali Campaign > A Financial Clean-Up Before the New Samvat > ${closing}`);
-        assert.strictEqual(t.deliverable_type, null, closing);
-        assert.deepStrictEqual(t.type_candidates, [
-            "Data Research and Analysis (Web)",
-            "Data Research and Analysis (SMI)"
-        ]);
+        assert.strictEqual(t.deliverable_type, "Data Research and Analysis (SMI)", closing);
+        assert.strictEqual(t.type_source, "line", closing);
+        assert.deepStrictEqual(t.type_candidates, []);
     }
+
+    const web = one("- TFP Premium > Diwali Campaign > Update Your Nominees, Not Just Your Wardrobe > Web Based Data");
+    assert.strictEqual(web.deliverable_type, "Data Research and Analysis (Web)");
 });
 
 test("a line with no closing type leaves the type empty", () => {
