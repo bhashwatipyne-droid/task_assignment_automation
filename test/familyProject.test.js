@@ -65,3 +65,10 @@ test("an abbreviation with a deliverable that does not exist is still held", () 
     const t = parse("BBNPP > Balanced Hybrid Fund Animation");
     assert.strictEqual(t.needs_review, true);
 });
+
+test("a line opening with a word only one client uses is not called ambiguous between clients", () => {
+    matcher.useLexicon(base);
+    const t = parse("BBNPP > Balanced Hybrid Fund Animation");
+    assert.strictEqual(t.client_name, "Baroda BNP Paribas");
+    assert.ok(!t.review_reasons.some(r => /more than one client/i.test(r)), t.review_reasons.join("; "));
+});

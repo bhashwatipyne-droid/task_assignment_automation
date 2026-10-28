@@ -1156,7 +1156,23 @@ function resolveLine(rawLine) {
 
         }
 
-        const ranked = Array.from(votes.entries()).sort((a, b) => b[1] - a[1]);
+        let ranked = Array.from(votes.entries()).sort((a, b) => b[1] - a[1]);
+
+        // a tie, but the line opens with a word that only ONE client's project
+        // names carry ("BBNPP" -> Baroda BNP Paribas): that word decides; the
+        // generic words after it ("Balanced Hybrid Fund") only produce ties
+        if (ranked.length > 1 && ranked[0][1] - ranked[1][1] < CLIENT_TIE_MARGIN) {
+            const lead = words(rawLine)[0];
+            const owners = new Set(
+                lead ? LEX.projects
+                    .filter(p => !p.alt && p.client_id && words(p.name).includes(lead))
+                    .map(p => p.client_id) : []
+            );
+            const hit = owners.size === 1 ? ranked.find(r => owners.has(r[0])) : null;
+            if (hit) {
+                ranked = [[hit[0], ranked[0][1] + CLIENT_TIE_MARGIN]].concat(ranked.filter(r => r !== hit));
+            }
+        }
 
         if (ranked.length === 0) {
 
