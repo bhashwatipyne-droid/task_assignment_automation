@@ -606,6 +606,56 @@ const strongDeliverable = (r) =>
     r && r.raw >= DELIVERABLE_MIN_SCORE && r.mass >= MIN_MASS;
 
 
+// "TFP > Brighter Diwali Reel": TFP is a family of monthly projects (TFP Oct-26,
+// TFP May-26 ...) and the rest of the line is the deliverable, so the deliverable
+// decides which month. This applies when the line starts with the family's word
+// and the candidate deliverables belong to projects starting with that same word.
+// A weaker score than the near-exact bar is enough, but the pick must be clear:
+//  - the candidates that score close to the best are compared by evidence
+//    (mass: how many distinctive words they explain). A generic one-word
+//    deliverable ("Diwali") can score as high as the right one while explaining
+//    far less of the line, so it loses to a clearly better explained one;
+//  - candidates that all sit in one project are fine (the project is clear);
+//  - candidates in different projects with comparable evidence are NOT guessed:
+//    the task is held for a person to confirm.
+const FAMILY_MIN_DELIVERABLE = 0.6;
+const FAMILY_TIE_MARGIN = 0.05;
+const FAMILY_MASS_RATIO = 1.5;
+// with no other candidate to compare against, a lone weak match is not enough
+const FAMILY_SOLO_MIN = 0.7;
+
+function familyPick(ev, rawLine) {
+
+    const best = ev && ev.dels && ev.dels[0];
+
+    if (!best || best.raw < FAMILY_MIN_DELIVERABLE) return null;
+
+    const lead = words(rawLine)[0];
+
+    if (!lead) return null;
+
+    const ownerOf = r => LEX.projects.find(p => p.id === r.entity.project_id && !p.alt);
+
+    const pool = ev.dels
+        .filter(r => r.raw >= FAMILY_MIN_DELIVERABLE && r.raw >= best.raw - FAMILY_TIE_MARGIN)
+        .filter(r => { const o = ownerOf(r); return o && words(o.name)[0] === lead; })
+        .sort((a, b) => (b.mass || 0) - (a.mass || 0));
+
+    if (!pool.length) return null;
+
+    const top = pool[0];
+
+    const rival = pool.find(r => r.entity.project_id !== top.entity.project_id);
+
+    if (rival && (top.mass || 0) < FAMILY_MASS_RATIO * (rival.mass || 0)) return null;
+
+    if (!rival && top.raw < FAMILY_SOLO_MIN) return null;
+
+    return top;
+
+}
+
+
 // ------------------------------------------------------------
 // LINE CLEANING
 // ------------------------------------------------------------
@@ -1252,16 +1302,29 @@ function resolveLine(rawLine) {
 
     if (projectIdx === -1 && firstDel !== -1) {
 
-        const d = evals[firstDel].dels[0];
+        let d = evals[firstDel].dels[0];
 
-        const owner = LEX.projects.find(p => p.id === d.entity.project_id && !p.alt);
+        let owner = LEX.projects.find(p => p.id === d.entity.project_id && !p.alt);
 
         // a short generic deliverable ("Fund Guide") says little about its
         // project: only trust the owner if the match is near exact or the
         // owner project itself fits the text
         const ownerRow = evals[firstDel].projects.find(r => r.entity.id === d.entity.project_id);
 
-        const trustOwner = d.raw >= 0.85 || strongProject(ownerRow);
+        let trustOwner = d.raw >= 0.85 || strongProject(ownerRow);
+
+        // "TFP > <deliverable>": the deliverable decides which month (familyPick)
+        if (!trustOwner) {
+
+            const fam = familyPick(evals[firstDel], rawLine);
+
+            if (fam) {
+                d = fam;
+                owner = LEX.projects.find(p => p.id === fam.entity.project_id && !p.alt);
+                trustOwner = Boolean(owner);
+            }
+
+        }
 
         if (owner && !trustOwner) {
 
