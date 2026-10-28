@@ -305,7 +305,7 @@ function parseTaskLine(rawLine) {
                 needs_review: m.needs_review,
                 review_reasons: m.review_reasons,
 
-                match_method: "database",
+                match_method: m.match_method || "database",
 
                 raw_line: rawLine
 

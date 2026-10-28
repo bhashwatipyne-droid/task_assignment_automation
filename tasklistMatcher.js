@@ -31,6 +31,7 @@ const fs = require("fs");
 const path = require("path");
 
 const { CLIENT_ALIASES, CLIENT_FAMILIES } = require("./clientAliases");
+const learned = require("./learned");
 
 const {
     aliasPhrasesFor,
@@ -237,6 +238,57 @@ function loadLexicon(file) {
 // Make a lexicon (an object, as lexicon.json holds it) the live one. Used at
 // start-up from lexicon.json and again whenever it is rebuilt from the live
 // PMT data, so the matcher never works from a stale snapshot for long.
+// What the manager's earlier decisions taught (see learned.js)
+let LEARNED = { exact: new Map(), leadClient: new Map() };
+
+function useLearned(lookups) {
+    LEARNED = lookups && lookups.exact && lookups.leadClient
+        ? lookups
+        : { exact: new Map(), leadClient: new Map() };
+}
+
+// A line the manager already resolved, worded the same: use their answer.
+function applyLearnedExact(result, rawLine) {
+    const rule = LEARNED.exact.get(learned.lineKey(rawLine));
+    if (!rule) return result;
+
+    const project = LEX.projects.find(p => p.id === rule.project_id && !p.alt);
+    if (!project) return result; // the project no longer exists: ignore the rule
+    const client = (LEX.clients || []).find(c => c.id === project.client_id);
+
+    result.project_id = project.id;
+    result.project_name = project.name;
+    result.client_id = project.client_id;
+    result.client_name = client ? client.name : result.client_name;
+
+    const del = rule.deliverable_id && (LEX.deliverables || []).find(
+        d => d.id === rule.deliverable_id && d.project_id === project.id
+    );
+    if (del) {
+        result.deliverable_name = del.name;
+        result.db_match.deliverable_found = true;
+        result.db_match.deliverable_in_db = del.name;
+        result.db_match.deliverable_id = del.id;
+    }
+
+    result.db_match.project_found = true;
+    result.confidence = {
+        client: 0.95,
+        project: 0.95,
+        deliverable: del ? 0.95 : result.confidence.deliverable
+    };
+    result.client_source = "learned from an earlier decision";
+    result.match_method = "learned";
+    result.needs_review = false;
+    result.review_reasons = [];
+    return result;
+}
+
+function resolveLine(rawLine) {
+    const result = resolveBase(rawLine);
+    return result ? applyLearnedExact(result, rawLine) : result;
+}
+
 function useLexicon(lex) {
 
     LEX = lex;
@@ -863,7 +915,7 @@ function preferDeliverableType(cands, rawLine) {
 // MAIN: RESOLVE ONE LINE
 // ------------------------------------------------------------
 
-function resolveLine(rawLine) {
+function resolveBase(rawLine) {
 
     if (!isReady()) {
         return null;
@@ -1156,6 +1208,7 @@ function resolveLine(rawLine) {
 
         }
 
+        let clientLearned = false;
         let ranked = Array.from(votes.entries()).sort((a, b) => b[1] - a[1]);
 
         // a tie, but the line opens with a word that only ONE client's project
@@ -1168,8 +1221,11 @@ function resolveLine(rawLine) {
                     .filter(p => !p.alt && p.client_id && words(p.name).includes(lead))
                     .map(p => p.client_id) : []
             );
-            const hit = owners.size === 1 ? ranked.find(r => owners.has(r[0])) : null;
+            const taught = lead && LEARNED.leadClient.get(lead);
+            let hit = owners.size === 1 ? ranked.find(r => owners.has(r[0])) : null;
+            if (!hit && taught) hit = ranked.find(r => r[0] === taught) || null;
             if (hit) {
+                clientLearned = Boolean(taught) && hit[0] === taught;
                 ranked = [[hit[0], ranked[0][1] + CLIENT_TIE_MARGIN]].concat(ranked.filter(r => r !== hit));
             }
         }
@@ -1201,6 +1257,7 @@ function resolveLine(rawLine) {
             result.client_name = client.name;
             result.client_id = client.id;
             let clientConf = Math.min(0.9, ranked[0][1]);
+            if (clientLearned) clientConf = Math.max(clientConf, 0.85);
 
             // only one client has any evidence, and a distinctive word of
             // its project is in the line: no need to ask for confirmation
@@ -1739,6 +1796,7 @@ function finish(result, reason) {
 module.exports = {
     loadLexicon,
     useLexicon,
+    useLearned,
     commaPhrases,
     isReady,
     lexiconInfo,

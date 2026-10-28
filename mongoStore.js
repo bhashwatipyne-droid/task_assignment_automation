@@ -60,6 +60,7 @@ const fs = require("fs");
 const path = require("path");
 
 const matcher = require("./tasklistMatcher");
+const learned = require("./learned");
 const { buildLexicon } = require("./lexiconBuilder");
 
 
@@ -443,6 +444,9 @@ async function refreshLexicon(force = false) {
         const lexicon = buildLexicon(projects, deliverables, clients);
 
         matcher.useLexicon(lexicon);
+
+        // what the managers' earlier decisions taught (learned.js); never blocks the rebuild
+        matcher.useLearned(await learned.loadFromDb(db, log));
 
         lexiconRefreshedAt = Date.now();
 
