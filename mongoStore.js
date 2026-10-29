@@ -595,6 +595,10 @@ function resolveAssignee(name, team, userList = users) {
     }
 
     if (pool.length === 0) {
+        // a line under a "Team" heading names nobody: the manager picks who in PMT
+        if (/^team$/i.test(String(name).trim())) {
+            return { user: null, reason: `No one is named: the line is under a "Team" heading. Choose who it is for` };
+        }
         return { user: null, reason: `No PMT user found for "${name}"` };
     }
 
