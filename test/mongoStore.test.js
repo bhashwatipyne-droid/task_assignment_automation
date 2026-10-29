@@ -797,3 +797,33 @@ test("source message ids are added and removed without losing the other messages
     assert.equal(db.all("tasklist_items")[0].status, "withdrawn");
     assert.deepEqual(db.all("tasklist_items")[0].source_message_ids, []);
 });
+
+test("a Team line: the manager who posted it owns it and the rest of the team are collaborators", () => {
+    const assigner = { assigned_by_user_id: "manager-vs" };
+    const r = store.wholeTeam(assigner, "content", USERS);
+    assert.equal(r.owner.id, "manager-vs");
+    // the same team only, no test accounts, no admins, never the owner twice
+    assert.deepEqual(r.collaborators.sort(), ["manager-hp", "manager-sa", "member-rb"]);
+    // poster unknown, or from another team: nothing is guessed, the line is held
+    assert.equal(store.wholeTeam({ assigned_by_user_id: null }, "content", USERS), null);
+    assert.equal(store.wholeTeam(assigner, "design", USERS), null);
+});
+
+test("end to end: a Team line becomes one task owned by the poster, with the team as collaborators", async () => {
+    process.env.MANAGER_MAP = "9800000001=Vanshika Shah";
+    try {
+        const db = liveDb();
+        const text = `Content Team
+Team
+- ICICI Prudential Pharma - From Lab to Life (Review & Changes) - High Priority`;
+        await store.persist(payloadFor(text));
+        const items = db.all("tasklist_items");
+        assert.equal(items.length, 1);
+        assert.equal(items[0].assignee_user_id, "manager-vs");
+        assert.equal(items[0].assigned_by_user_id, "manager-vs");
+        assert.deepEqual([...items[0].collaborator_user_ids].sort(), ["manager-hp", "manager-sa", "member-rb"]);
+        assert.ok(!/team/i.test(items[0].review_reason || ""), "not held for the assignee");
+    } finally {
+        delete process.env.MANAGER_MAP;
+    }
+});

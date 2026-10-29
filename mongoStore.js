@@ -611,6 +611,34 @@ function resolveAssignee(name, team, userList = users) {
 }
 
 
+// A line under a "Team" heading is a task for the whole team: the manager who
+// posted the list owns it and everyone else in that team is a collaborator
+// (PMT tags them on the owner's Work Sheet row once it is accepted). Needs the
+// poster to be known (MANAGER_MAP); without it the line is held and a manager
+// picks the owner in PMT.
+const isTeamLine = (name) => /^team$/i.test(String(name || "").trim());
+
+function wholeTeam(assigner, team, userList = users) {
+
+    const dept = TEAM_DEPARTMENT[team];
+
+    if (!dept || !assigner || !assigner.assigned_by_user_id) return null;
+
+    const sameTeam = (u) => (u.department || "").toLowerCase() === dept;
+
+    const owner = userList.find(u => u.id === assigner.assigned_by_user_id);
+
+    if (!owner || !assignable(owner) || !sameTeam(owner)) return null;
+
+    const collaborators = userList
+        .filter(u => u.id !== owner.id && assignable(u) && sameTeam(u) && !isTestAccount(u))
+        .map(u => u.id);
+
+    return { owner, collaborators };
+
+}
+
+
 // ------------------------------------------------------------
 // WHO SENT THE TASKLIST  (shown on the task card as "from")
 // ------------------------------------------------------------
@@ -894,8 +922,19 @@ function buildDocuments(payload, userList = users, refs = null) {
         const reasons = (t.review_reasons || []).slice();
 
         // ---- assignee ----------------------------------------
-        const { user, reason, team_mismatch, found_departments } =
+        let { user, reason, team_mismatch, found_departments } =
             resolveAssignee(t.assignee, team, userList);
+
+        // "Team" heading: the poster owns it, the rest of the team collaborate
+        let collaborators = [];
+
+        const everyone = !user && isTeamLine(t.assignee) ? wholeTeam(assigner, team, userList) : null;
+
+        if (everyone) {
+            user = everyone.owner;
+            reason = null;
+            collaborators = everyone.collaborators;
+        }
 
         if (reason) reasons.push(reason);
 
@@ -985,6 +1024,7 @@ function buildDocuments(payload, userList = users, refs = null) {
             assignee_name: t.assignee,
             assignee_user_id: user ? user.id : null,
             assignee_pmt_name: user ? user.name : null,
+            ...(collaborators.length ? { collaborator_user_ids: collaborators } : {}),
 
             ...assigner,
 
@@ -1842,6 +1882,7 @@ module.exports = {
     refreshLearned,
     startLearnedRefresh,
     resolveAssigner,
+    wholeTeam,
     validateRefs,
     loadReferences,
     istDate,
