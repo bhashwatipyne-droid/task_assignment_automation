@@ -1090,6 +1090,7 @@ store.init()
         console.error("Store init error:", error.message);
     })
     .then(() => store.refreshLexicon(true))
+    .then(() => store.startLearnedRefresh())
     .then(() => startWhatsApp())
     .catch(
         (error) => {

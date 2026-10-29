@@ -467,6 +467,29 @@ async function refreshLexicon(force = false) {
 }
 
 
+// What managers decided (held items resolved, Planning card edits, Work Sheet row
+// edits) becomes rules in nlp_learned_rules. That used to happen only at start-up
+// and when the next tasklist arrived, so a decision did not show in PMT's
+// "Learned from your decisions" list until then. This is the cheap part of
+// refreshLexicon on its own, run on a timer.
+const LEARNED_REFRESH_MS = Number(process.env.LEARNED_REFRESH_MS) || 2 * 60 * 1000;
+let learnedTimer = null;
+
+async function refreshLearned() {
+    if (!db) return false;
+    const lookups = await learned.loadFromDb(db, log); // never throws
+    if (!lookups) return false;
+    matcher.useLearned(lookups);
+    return true;
+}
+
+function startLearnedRefresh() {
+    if (learnedTimer || LEARNED_REFRESH_MS <= 0) return;
+    learnedTimer = setInterval(() => { refreshLearned().catch(() => {}); }, LEARNED_REFRESH_MS);
+    if (learnedTimer.unref) learnedTimer.unref();
+}
+
+
 const TEAM_DEPARTMENT = {
     content: "content",
     design: "design",
@@ -1812,6 +1835,8 @@ module.exports = {
     assigneeNames,
     loadUsers,
     refreshLexicon,
+    refreshLearned,
+    startLearnedRefresh,
     resolveAssigner,
     validateRefs,
     loadReferences,
