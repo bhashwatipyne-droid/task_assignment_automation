@@ -288,6 +288,7 @@ function parseTaskLine(rawLine) {
                 deliverable_name: m.deliverable_name,
                 deliverable_type: m.deliverable_type || null,
                 type_source: m.type_source || null,
+                learned_type: Boolean(m.learned_type),
                 type_candidates: m.type_candidates || [],
                 action: m.action,
                 notes: m.notes,

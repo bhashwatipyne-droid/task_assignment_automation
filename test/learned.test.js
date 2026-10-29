@@ -74,3 +74,37 @@ test("a taught first word settles a client tie", () => {
     assert.strictEqual(after.client_name, "Baroda BNP Paribas");
     assert.ok(!after.review_reasons.some(r => /more than one client/i.test(r)), after.review_reasons.join("; "));
 });
+
+test("a type the manager chose is learned and applied to the same wording", () => {
+    matcher.useLexicon(base);
+    const line = "Zzq > Something odd about the fund";
+    const rules = learned.buildRules([item(line, { deliverable_type: "Reel / Short Video", deliverable_type_corrected: true })]);
+    assert.strictEqual(rules.find(r => r.kind === "exact").deliverable_type, "Reel / Short Video");
+    matcher.useLearned(learned.toLookups(rules));
+    const t = parse(line);
+    assert.strictEqual(t.deliverable_type, "Reel / Short Video");
+    assert.strictEqual(t.learned_type, true);
+});
+
+test("the matcher's own reading of a type is not a decision", () => {
+    const rules = learned.buildRules([item("Foo > Bar baz", { deliverable_type: "Carousel" })]);
+    assert.strictEqual(rules.find(r => r.kind === "exact").deliverable_type, null);
+});
+
+test("a Work Sheet row changed after PMT made it is a correction; an untouched one is not", () => {
+    const task = { id: "t1", raw_line: "Zzq > Something odd about the fund", client_id: "c1", work_item_id: "w1", row_snapshot: { project_id: "p0", deliverable_id: null, deliverable_type: "Other Initiatives" } };
+    const same = { id: "w1", project_id: "p0", client_id: "c1", deliverable_id: null, deliverable_type: "Other Initiatives" };
+    assert.deepStrictEqual(learned.sheetCorrections([task], [same]), []);
+
+    const typeOnly = learned.sheetCorrections([task], [{ ...same, deliverable_type: "Reel / Short Video" }]);
+    assert.strictEqual(typeOnly.length, 1);
+    assert.strictEqual(typeOnly[0].deliverable_type_corrected, true);
+
+    const projectOnly = learned.sheetCorrections([task], [{ ...same, project_id: "p9" }])[0];
+    assert.strictEqual(projectOnly.project_id, "p9");
+    assert.strictEqual(projectOnly.deliverable_type_corrected, false);   // type was not what changed
+
+    // accepted before snapshots existed, or the row is gone: nothing to learn
+    assert.deepStrictEqual(learned.sheetCorrections([{ ...task, row_snapshot: undefined }], [same]), []);
+    assert.deepStrictEqual(learned.sheetCorrections([task], []), []);
+});

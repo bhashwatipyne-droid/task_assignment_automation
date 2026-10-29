@@ -977,6 +977,9 @@ function buildDocuments(payload, userList = users, refs = null) {
             // name exists yet: the matched deliverable's own type ("database") or
             // the closing word of the line, e.g. "... > Carousel" ("line")
             deliverable_type: t.deliverable_type || null,
+            // set when the type came from what a manager chose for this wording
+            // (learned.js): PMT then keeps it over the deliverable's own type
+            deliverable_type_corrected: Boolean(t.learned_type),
             type_source: t.type_source || null,
             type_candidates: t.type_candidates || [],
 

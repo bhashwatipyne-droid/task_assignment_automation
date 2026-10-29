@@ -271,6 +271,13 @@ function applyLearnedExact(result, rawLine) {
         result.db_match.deliverable_id = del.id;
     }
 
+    // a type the manager chose for this line beats the matcher's reading of it
+    if (rule.deliverable_type) {
+        result.deliverable_type = rule.deliverable_type;
+        result.type_source = "learned";
+        result.learned_type = true;
+    }
+
     result.db_match.project_found = true;
     result.confidence = {
         client: 0.95,
