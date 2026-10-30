@@ -3,6 +3,8 @@
 //
 //   exact rule   a line the manager has resolved before, worded the same, goes
 //                straight to the project, deliverable and deliverable type they chose.
+//                When several people resolved it, the answer that clearly wins
+//                (see MIN_AGREEMENT) is the rule; a tie or a split makes none.
 //   alias rule   a first word ("TFP", "BBNPP") the manager has resolved to the
 //                same client at least MIN_ALIAS_LINES times, never to another,
 //                settles a client tie.
@@ -16,6 +18,8 @@
 const { words } = require("./textUtils");
 
 const MIN_ALIAS_LINES = 3;
+// How much of the people who resolved one line must agree for it to become a rule
+const MIN_AGREEMENT = 0.75;
 const RULES = "nlp_learned_rules";
 
 // "Absl Apex > IE campaign > Tool kit 3 (first cut today)" -> the words, without
@@ -23,6 +27,28 @@ const RULES = "nlp_learned_rules";
 const lineKey = raw => words(String(raw || "").replace(/\([^)]*\)\s*$/, "")).join(" ");
 
 const leadWord = raw => words(String(raw || ""))[0] || "";
+
+// A type only counts when a person chose it (not the matcher's own reading)
+const chosenTypeOf = it => (it.deliverable_type_corrected ? (it.deliverable_type || "") : "");
+
+// Of several people's answers to the same question, the one that clearly wins:
+// strictly more votes than any other answer and at least MIN_AGREEMENT of all
+// votes. A tie or a real split returns null (no rule). One person picking
+// differently from ten others does not cancel what the ten agreed on.
+function clearWinner(list, answerOf) {
+    const tally = new Map();
+    for (const it of list) {
+        const a = answerOf(it);
+        const t = tally.get(a) || { answer: a, votes: 0, latest: null };
+        t.votes += 1;
+        t.latest = it;
+        tally.set(a, t);
+    }
+    const ranked = [...tally.values()].sort((x, y) => y.votes - x.votes);
+    if (!ranked.length) return null;
+    if (ranked[1] && ranked[1].votes === ranked[0].votes) return null;
+    return ranked[0].votes / list.length >= MIN_AGREEMENT ? ranked[0] : null;
+}
 
 function buildRules(items) {
     const byLine = new Map();
@@ -33,10 +59,8 @@ function buildRules(items) {
         const key = lineKey(it.raw_line);
         if (!key) continue;
 
-        const l = byLine.get(key) || { decisions: new Set(), latest: null };
-        // a type only counts when a person chose it (not the matcher's own reading)
-        const chosenType = it.deliverable_type_corrected ? (it.deliverable_type || "") : "";
-        l.decisions.add(`${it.project_id}|${it.deliverable_id || ""}|${chosenType}`);
+        const l = byLine.get(key) || { items: [], latest: null };
+        l.items.push(it);
         l.latest = it;
         byLine.set(key, l);
 
@@ -51,15 +75,25 @@ function buildRules(items) {
 
     const rules = [];
     for (const [key, l] of byLine) {
-        if (l.decisions.size !== 1) continue; // decided two different ways: not a rule
+        // The project first: if the people who resolved this line did not clearly
+        // agree on it (a tie, or a real split), it is not a rule.
+        const project = clearWinner(l.items, it => it.project_id);
+        if (!project) continue;
+        const agreeing = l.items.filter(it => it.project_id === project.answer);
+
+        // Then the deliverable and type within that project. If those are split
+        // (people filed the same line under different deliverables) the rule
+        // still sends the line to the project and leaves the deliverable open.
+        const decision = clearWinner(agreeing, it => `${it.deliverable_id || ""}|${chosenTypeOf(it)}`);
+        const basis = decision ? decision.latest : project.latest;
         rules.push({
             id: `exact:${key}`, kind: "exact", key,
-            project_id: l.latest.project_id,
-            client_id: l.latest.client_id,
-            deliverable_id: l.latest.deliverable_id || null,
-            deliverable_type: l.latest.deliverable_type_corrected ? (l.latest.deliverable_type || null) : null,
+            project_id: project.answer,
+            client_id: project.latest.client_id,
+            deliverable_id: decision ? (basis.deliverable_id || null) : null,
+            deliverable_type: decision ? (chosenTypeOf(basis) || null) : null,
             example: l.latest.raw_line,
-            count: 1
+            count: project.votes
         });
     }
     for (const [lead, a] of byLead) {

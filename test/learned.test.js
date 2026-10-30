@@ -31,6 +31,41 @@ test("an exact rule needs one consistent decision; two different ones cancel it"
     assert.strictEqual(clash.filter(r => r.kind === "exact").length, 0);
 });
 
+test("one person filing a line differently does not cancel what ten others agreed on", () => {
+    const same = n => Array.from({ length: n }, () => item("FT > 30 Years > Brand Film > Campaign Ideation (Today first half)", { deliverable_id: "d1" }));
+    // ten agree on project and deliverable, one chose another deliverable in the same project
+    const rules = learned.buildRules([...same(10), item("- FT > 30 Years > Brand Film > Campaign Ideation", { deliverable_id: "d2" })]);
+    const exact = rules.filter(r => r.kind === "exact");
+    assert.strictEqual(exact.length, 1);
+    assert.strictEqual(exact[0].project_id, BNP.id);
+    assert.strictEqual(exact[0].deliverable_id, "d1");
+    assert.strictEqual(exact[0].count, 11);
+
+    // the same line resolved to a different PROJECT by one person: the ten still win
+    const dissent = learned.buildRules([...same(10), item("FT > 30 Years > Brand Film > Campaign Ideation", { project_id: "other" })]);
+    assert.strictEqual(dissent.find(r => r.kind === "exact").project_id, BNP.id);
+});
+
+test("a split line still sends to the project but leaves the deliverable open", () => {
+    const rules = learned.buildRules([
+        item("Foo > Bar baz", { deliverable_id: "d1" }), item("Foo > Bar baz", { deliverable_id: "d1" }),
+        item("Foo > Bar baz", { deliverable_id: "d2" }), item("Foo > Bar baz", { deliverable_id: "d2" })
+    ]);
+    const exact = rules.find(r => r.kind === "exact");
+    assert.strictEqual(exact.project_id, BNP.id);
+    assert.strictEqual(exact.deliverable_id, null);
+});
+
+test("a real split or a thin majority on the project makes no rule", () => {
+    const split = (a, b) => [
+        ...Array.from({ length: a }, () => item("Foo > Bar baz")),
+        ...Array.from({ length: b }, () => item("Foo > Bar baz", { project_id: "other" }))
+    ];
+    assert.strictEqual(learned.buildRules(split(2, 2)).filter(r => r.kind === "exact").length, 0);
+    assert.strictEqual(learned.buildRules(split(2, 1)).filter(r => r.kind === "exact").length, 0);
+    assert.strictEqual(learned.buildRules(split(3, 1)).filter(r => r.kind === "exact").length, 1);
+});
+
 test("an alias rule needs 3 different lines, all to one client", () => {
     const lines = ["Zork > a one", "Zork > b two", "Zork > c three"].map(l => item(l));
     assert.strictEqual(learned.buildRules(lines.slice(0, 2)).filter(r => r.kind === "alias").length, 0);
