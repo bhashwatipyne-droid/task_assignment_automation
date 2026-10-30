@@ -1046,7 +1046,8 @@ function buildDocuments(payload, userList = users, refs = null) {
             deliverable_type: t.deliverable_type || null,
             // set when the type came from what a manager chose for this wording
             // (learned.js): PMT then keeps it over the deliverable's own type
-            deliverable_type_corrected: Boolean(t.learned_type),
+            // (also set for a closing "changes" / "review", which beats it too)
+            deliverable_type_corrected: Boolean(t.learned_type || t.type_wins),
             type_source: t.type_source || null,
             type_candidates: t.type_candidates || [],
 

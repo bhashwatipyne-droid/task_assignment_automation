@@ -162,6 +162,7 @@ function typeOfPart(part) {
         .replace(/^\d+\s+/, "")
         .replace(/\s+/g, " ")
         .replace(/[.:]+$/, "")
+        .replace(/\s+finali[sz]ation$/, "")      // "Minimalist finalisation" is a Minimalist
         .trim();
 
     if (!plain) return null;
@@ -181,6 +182,27 @@ function typeOfPart(part) {
             : { type: null, candidates: DATA_RESEARCH_TYPES.slice() };
 
     }
+
+    return null;
+
+}
+
+// A closing part that ends in "changes" is the PMT type Changes, and one that
+// ends in "review(s)" is Team Reviews and Feedback, whatever comes before the
+// word ("Reel changes", "PPT internal changes", "Scripting Reviews"). A status
+// word after it ("... changes Delayed") does not hide it.
+function activityTypeOf(part) {
+
+    const last = String(part || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, " ")
+        .replace(/(?:\s+delayed)+\s*$/, "")
+        .trim()
+        .split(" ")
+        .pop();
+
+    if (/^changes?$/.test(last)) return "Changes";
+    if (/^reviews?$/.test(last)) return "Team Reviews and Feedback";
 
     return null;
 
@@ -1049,6 +1071,15 @@ function resolveBase(rawLine) {
 
     const arrowed = arrowParts.length > 1;
 
+    // The closing part as written, before the action words are cut out of it
+    // ("Reel changes", "PPT internal changes"): "changes" and "review" at its
+    // end say what kind of work it is, whatever comes before them.
+    const closingAsWritten = arrowed
+        ? dropTrailingStamps(arrowParts).pop()
+        : (text.split(/\s+[-–—]\s+|\s*[–—]\s*/).filter(Boolean).slice(1).pop() || text);
+
+    const activityType = activityTypeOf(closingAsWritten);
+
     if (arrowed) {
 
         const last = arrowParts.length - 1;
@@ -1623,7 +1654,18 @@ function resolveBase(rawLine) {
 
 
     // ---- deliverable type -----------------------------------
-    if (dbDeliverable && dbDeliverable.entity.type) {
+    if (activityType) {
+
+        // The line asks for changes or a review: that is the work, so it beats
+        // the matched deliverable's own type (type_wins: PMT keeps it over that)
+        result.deliverable_type = activityType;
+        result.type_source = "line";
+        result.type_wins = true;
+        result.type_candidates = [];
+
+    }
+
+    else if (dbDeliverable && dbDeliverable.entity.type) {
 
         result.deliverable_type = dbDeliverable.entity.type;
         result.type_source = "database";

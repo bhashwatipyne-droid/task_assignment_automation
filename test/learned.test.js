@@ -94,13 +94,13 @@ test("a closing word typed to one type on 3 different lines becomes a rule; fewe
 test("a learned closing word fills the type of a line nothing else could read", () => {
     matcher.useLexicon(base);
     const rules = learned.buildRules(
-        ["Foo > a > Data Review", "Foo > b > Script Review", "Foo > c > Scripting Reviews"].map(l => typed(l, REVIEWS))
+        ["Foo > a > Final Polish", "Foo > b > Quick Polish", "Foo > c > Polish"].map(l => typed(l, "Poster"))
     );
-    const line = "Zzq > Something odd about the fund > Review";
+    const line = "Zzq > Something odd about the fund > Last Polish";
     assert.ok(!parse(line).deliverable_type);
     matcher.useLearned(learned.toLookups(rules));
     const t = parse(line);
-    assert.strictEqual(t.deliverable_type, REVIEWS);
+    assert.strictEqual(t.deliverable_type, "Poster");
     assert.strictEqual(t.learned_type, true);
 
     // the closing word itself ("Carousel") still comes first
@@ -109,6 +109,30 @@ test("a learned closing word fills the type of a line nothing else could read", 
     );
     matcher.useLearned(learned.toLookups(carousel));
     assert.strictEqual(parse("Zzq > Something odd about the fund > Carousel").deliverable_type, "Carousel");
+});
+
+test("a closing 'changes' is Changes and a closing 'review' is Team Reviews and Feedback", () => {
+    matcher.useLexicon(base);
+    const type = line => parse("Zzq > Something odd about the fund > " + line).deliverable_type;
+    assert.strictEqual(type("Reel changes"), "Changes");                          // not Reel
+    assert.strictEqual(type("PPT internal changes (Today First half)"), "Changes"); // not PPT
+    assert.strictEqual(type("Meet the crew IG changes (today first half) Delayed"), "Changes"); // not IG
+    assert.strictEqual(type("Review & Changes"), "Changes");
+    assert.strictEqual(type("Review"), REVIEWS);
+    assert.strictEqual(type("Scripting Reviews"), REVIEWS);
+    assert.strictEqual(type("Script Review (6)"), REVIEWS);
+    // PMT keeps it over a matched deliverable's own type
+    assert.strictEqual(parse("Zzq > Something odd about the fund > Reel changes").type_wins, true);
+    assert.strictEqual(parse("Zzq > Something odd about the fund > Carousel").type_wins, false);
+});
+
+test("'finalisation' after a type word still reads the type; with 'changes' after it, it is Changes", () => {
+    matcher.useLexicon(base);
+    const type = line => parse("Zzq > Something odd about the fund > " + line).deliverable_type;
+    assert.strictEqual(type("Minimalist finalisation"), "Minimalist");
+    assert.strictEqual(type("Minimalist finalization (Today first half)"), "Minimalist");
+    assert.strictEqual(type("2 Minimalist finalisation with internal changes"), "Changes");
+    assert.ok(!type("Script TBD upon script finalisation"));
 });
 
 test("a type is read past a trailing date, after an underscore, and from 'web based research'", () => {
@@ -126,7 +150,9 @@ test("IG always means One Pager / Infographic, wherever it sits in the closing p
     const IG = "One Pager / Infographic";
     assert.strictEqual(parse("Zzq > Something odd about the fund > IG").deliverable_type, IG);
     assert.strictEqual(parse("Zzq > Something odd about the fund > SIF tool Kit Seties IG 3 (first cut today end of the day)").deliverable_type, IG);
-    assert.strictEqual(parse("Zzq > Something odd about the fund > Meet the crew IG changes (today first half)").deliverable_type, IG);
+    assert.strictEqual(parse("Zzq > Something odd about the fund > Meet the crew IG finalisation (today first half)").deliverable_type, IG);
+    // "changes" after it makes it Changes (see the changes / review test)
+    assert.strictEqual(parse("Zzq > Something odd about the fund > Meet the crew IG changes").deliverable_type, "Changes");
     // only the word IG: other words that contain the letters are not it
     assert.ok(!parse("Zzq > Something odd about the fund > Digital Gold").deliverable_type);
 });
