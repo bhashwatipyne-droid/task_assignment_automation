@@ -142,7 +142,9 @@ const SEGMENT_TYPES = [
     [/^booklets?$/, "Booklet"],
     [/^newsletters?$/, "Newsletters"],
     [/^(emailers?|mailers?)$/, "Emailers"],
-    [/^long videos?$/, "Long Video"],
+    // a plain "video" / "Shoot video" is a long video: short ones are called reel / AV
+    [/^(shoots? )?(long )?(videos?|films?)( shoots?)?$/, "Long Video"],
+    [/^data plug ?-? ?ins?$/, "Data Updation"],
     [/^(ppts?|pptx|presentations?|decks?)$/, "Presentation (PPT) - Per Slide"],
     [/^(web ?based (data|research)|web (data|research)|data research and analysis \(?web\)?)$/, "Data Research and Analysis (Web)"],
     [/^(smi data|smi research|data research and analysis \(?smi\)?)$/, "Data Research and Analysis (SMI)"],
@@ -174,6 +176,18 @@ function typeOfPart(part) {
     // "IG" always means infographic / one pager here, wherever it sits in the
     // closing part ("... > IG", "SIF tool Kit IG 3", "Meet the crew IG changes")
     if (/\big\b/.test(plain)) return { type: "One Pager / Infographic", candidates: [] };
+
+    // A title that simply ends in the type word ("Same game different strategy
+    // reel"): the last word is the type, the words before it are the name
+    const words = plain.split(" ");
+
+    if (words.length > 1 && /^(reels?|carousels?|infographics?|minimalists?|gifs?|posters?|brochures?)$/.test(words[words.length - 1])) {
+
+        for (const [re, type] of SEGMENT_TYPES) {
+            if (re.test(words[words.length - 1])) return { type, candidates: [] };
+        }
+
+    }
 
     if (AMBIGUOUS_SEGMENT_TYPES.test(plain)) {
 

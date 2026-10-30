@@ -234,3 +234,15 @@ test("a Work Sheet row changed after PMT made it is a correction; an untouched o
     assert.deepStrictEqual(learned.sheetCorrections([{ ...task, row_snapshot: undefined }], [same]), []);
     assert.deepStrictEqual(learned.sheetCorrections([task], []), []);
 });
+
+test("plain video, data plug in and a title ending in reel get their types; 'discussed' stays untyped", () => {
+    matcher.useLexicon(base);
+    const type = line => parse("Zzq > Something odd about the fund > " + line).deliverable_type;
+    assert.strictEqual(type("Shoot video"), "Long Video");
+    assert.strictEqual(type("Video"), "Long Video");
+    assert.strictEqual(type("Data plug in"), "Data Updation");
+    assert.strictEqual(type("Same game different strategy reel"), "Reel / Short Video");
+    assert.strictEqual(parse("Zzq > Something odd about the fund 2024_Behavior_Video").deliverable_type, "Long Video");
+    // held for learning, not guessed
+    assert.ok(!type("Script TBD upon script discussed"));
+});
