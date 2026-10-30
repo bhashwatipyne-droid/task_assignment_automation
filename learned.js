@@ -5,6 +5,10 @@
 //                straight to the project, deliverable and deliverable type they chose.
 //                When several people resolved it, the answer that clearly wins
 //                (see MIN_AGREEMENT) is the rule; a tie or a split makes none.
+//   closer rule  the last word of a line ("Review", "Changes") that people have
+//                typed to the same deliverable type on MIN_CLOSER_LINES different
+//                lines, never to another, fills the type of a line whose type
+//                nothing else could read.
 //   alias rule   a first word ("TFP", "BBNPP") the manager has resolved to the
 //                same client at least MIN_ALIAS_LINES times, never to another,
 //                settles a client tie.
@@ -15,9 +19,12 @@
 // PMT made it with). They are kept in nlp_learned_rules so a manager can switch
 // one off (disabled: true).
 // Nothing here changes the matcher's own scoring.
-const { words } = require("./textUtils");
+const { words, stem, dropTrailingStamps } = require("./textUtils");
 
 const MIN_ALIAS_LINES = 3;
+// Different lines with the same closing word that people typed to the same type
+const MIN_CLOSER_LINES = 3;
+const ARROW_RE = /\s*(?:-+>|[>›»→])+\s*/;
 // How much of the people who resolved one line must agree for it to become a rule
 const MIN_AGREEMENT = 0.75;
 const RULES = "nlp_learned_rules";
@@ -27,6 +34,16 @@ const RULES = "nlp_learned_rules";
 const lineKey = raw => words(String(raw || "").replace(/\([^)]*\)\s*$/, "")).join(" ");
 
 const leadWord = raw => words(String(raw || ""))[0] || "";
+
+// The stemmed last word of a line's closing part ("... > Scripting Reviews ->
+// "review"), ignoring timing notes in brackets and trailing date stamps. Only
+// arrowed lines have a closing part; others return "".
+function closerKey(raw) {
+    const parts = dropTrailingStamps(String(raw || "").split(ARROW_RE));
+    if (parts.length < 2) return "";
+    const last = words(parts[parts.length - 1].replace(/\([^)]*\)?/g, " ")).pop() || "";
+    return last.length >= 3 && !/^\d/.test(last) ? stem(last) : "";
+}
 
 // A type only counts when a person chose it (not the matcher's own reading)
 const chosenTypeOf = it => (it.deliverable_type_corrected ? (it.deliverable_type || "") : "");
@@ -53,6 +70,7 @@ function clearWinner(list, answerOf) {
 function buildRules(items) {
     const byLine = new Map();
     const byLead = new Map();
+    const byCloser = new Map();
 
     for (const it of items || []) {
         if (!it || !it.raw_line || !it.project_id || !it.client_id) continue;
@@ -63,6 +81,17 @@ function buildRules(items) {
         l.items.push(it);
         l.latest = it;
         byLine.set(key, l);
+
+        // a type a person chose, filed under the line's closing word
+        const chosen = chosenTypeOf(it);
+        const closer = chosen ? closerKey(it.raw_line) : "";
+        if (closer) {
+            const c = byCloser.get(closer) || new Map();
+            const lines = c.get(chosen) || new Set();
+            lines.add(key);
+            c.set(chosen, lines);
+            byCloser.set(closer, c);
+        }
 
         const lead = leadWord(it.raw_line);
         if (lead) {
@@ -96,6 +125,17 @@ function buildRules(items) {
             count: project.votes
         });
     }
+    for (const [closer, types] of byCloser) {
+        if (types.size !== 1) continue; // typed two different ways: not a rule
+        const [[type, lines]] = types;
+        if (lines.size < MIN_CLOSER_LINES) continue;
+        rules.push({
+            id: `closer:${closer}`, kind: "closer", key: closer,
+            deliverable_type: type,
+            example: closer,
+            count: lines.size
+        });
+    }
     for (const [lead, a] of byLead) {
         if (a.clients.size !== 1 || a.lines.size < MIN_ALIAS_LINES) continue;
         rules.push({
@@ -112,12 +152,14 @@ function buildRules(items) {
 function toLookups(rules, disabledIds = new Set()) {
     const exact = new Map();
     const leadClient = new Map();
+    const closerType = new Map();
     for (const r of rules) {
         if (disabledIds.has(r.id)) continue;
         if (r.kind === "exact") exact.set(r.key, r);
         else if (r.kind === "alias") leadClient.set(r.key, r.client_id);
+        else if (r.kind === "closer") closerType.set(r.key, r.deliverable_type);
     }
-    return { exact, leadClient };
+    return { exact, leadClient, closerType };
 }
 
 // Accepted tasks whose Work Sheet row was changed after PMT made it: what the row
@@ -196,4 +238,4 @@ async function loadFromDb(db, log = () => {}) {
     }
 }
 
-module.exports = { MIN_ALIAS_LINES, lineKey, leadWord, buildRules, sheetCorrections, toLookups, loadFromDb };
+module.exports = { MIN_ALIAS_LINES, MIN_CLOSER_LINES, closerKey, lineKey, leadWord, buildRules, sheetCorrections, toLookups, loadFromDb };

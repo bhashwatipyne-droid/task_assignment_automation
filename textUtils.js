@@ -192,8 +192,29 @@ function fuzzyEq(a, b) {
 }
 
 
+// A part that is only a date and/or a time ("30-10-2026", "30-10-2026 |",
+// "30-10-2026 | 6:00 pm"): a timing stamp at the end of a line, not its task.
+const STAMP_ONLY_RE = /^[\d\s\-\/.:|,]*(?:am|pm)?[\d\s\-\/.:|,]*$/i;
+
+// The parts of a line split on its arrows, without trailing date/time stamps
+// ("... > Reel > 30-10-2026" -> "... > Reel"), so the closing part is the last
+// part that says something. Never drops the first part.
+function dropTrailingStamps(parts) {
+
+    const out = parts.slice();
+
+    while (out.length > 1 && STAMP_ONLY_RE.test(String(out[out.length - 1]).trim())) {
+        out.pop();
+    }
+
+    return out;
+
+}
+
+
 module.exports = {
     STOP,
+    dropTrailingStamps,
     norm,
     stem,
     words,

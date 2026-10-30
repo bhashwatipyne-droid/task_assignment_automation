@@ -66,6 +66,61 @@ test("a real split or a thin majority on the project makes no rule", () => {
     assert.strictEqual(learned.buildRules(split(3, 1)).filter(r => r.kind === "exact").length, 1);
 });
 
+const typed = (line, type) => item(line, { deliverable_type: type, deliverable_type_corrected: true });
+const REVIEWS = "Team Reviews and Feedback";
+
+test("a line's closing word is its last word, without timing notes or date stamps", () => {
+    assert.strictEqual(learned.closerKey("- TFP Premium > Diwali Campaign > Scripting Reviews"), "review");
+    assert.strictEqual(learned.closerKey("TFP > Diwali > Script Review (6)"), "review");
+    assert.strictEqual(learned.closerKey("TFP > My Parents Portfolio vs Mine > Reel > 30-10-2026 | 6:00 pm"), "reel");
+    assert.strictEqual(learned.closerKey("Invesco Large Cap PPT"), "");          // no arrow, no closing part
+});
+
+test("a closing word typed to one type on 3 different lines becomes a rule; fewer or mixed does not", () => {
+    const lines = ["Foo > a > Data Review", "Foo > b > Script Review (6)", "Foo > c > Scripting Reviews"];
+    const three = learned.buildRules(lines.map(l => typed(l, REVIEWS)));
+    const rule = three.find(r => r.kind === "closer");
+    assert.strictEqual(rule.key, "review");
+    assert.strictEqual(rule.deliverable_type, REVIEWS);
+    assert.strictEqual(rule.count, 3);
+
+    assert.strictEqual(learned.buildRules(lines.slice(0, 2).map(l => typed(l, REVIEWS))).filter(r => r.kind === "closer").length, 0);
+    const mixed = lines.map(l => typed(l, REVIEWS)).concat(typed("Foo > d > Data Reviews", "Changes"));
+    assert.strictEqual(learned.buildRules(mixed).filter(r => r.kind === "closer").length, 0);
+    // a type the matcher only read itself is not a decision
+    assert.strictEqual(learned.buildRules(lines.map(l => item(l, { deliverable_type: REVIEWS }))).filter(r => r.kind === "closer").length, 0);
+});
+
+test("a learned closing word fills the type of a line nothing else could read", () => {
+    matcher.useLexicon(base);
+    const rules = learned.buildRules(
+        ["Foo > a > Data Review", "Foo > b > Script Review", "Foo > c > Scripting Reviews"].map(l => typed(l, REVIEWS))
+    );
+    const line = "Zzq > Something odd about the fund > Review";
+    assert.ok(!parse(line).deliverable_type);
+    matcher.useLearned(learned.toLookups(rules));
+    const t = parse(line);
+    assert.strictEqual(t.deliverable_type, REVIEWS);
+    assert.strictEqual(t.learned_type, true);
+
+    // the closing word itself ("Carousel") still comes first
+    const carousel = learned.buildRules(
+        ["Foo > a > Carousel", "Foo > b > Carousel", "Foo > c > Carousel"].map(l => typed(l, "Poster"))
+    );
+    matcher.useLearned(learned.toLookups(carousel));
+    assert.strictEqual(parse("Zzq > Something odd about the fund > Carousel").deliverable_type, "Carousel");
+});
+
+test("a type is read past a trailing date, after an underscore, and from 'web based research'", () => {
+    matcher.useLexicon(base);
+    assert.strictEqual(parse("Zzq > Something odd about the fund > Reel > 30-10-2026").deliverable_type, "Reel / Short Video");
+    assert.strictEqual(parse("Zzq > Something odd about the fund > Reel > 30-10-2026 | 6:00 pm").deliverable_type, "Reel / Short Video");
+    assert.strictEqual(parse("Zzq > Something odd about the fund 2024_Reel").deliverable_type, "Reel / Short Video");
+    assert.strictEqual(parse("Zzq > Something odd about the fund > Web Based Research").deliverable_type, "Data Research and Analysis (Web)");
+    // a date on its own is still not a type
+    assert.ok(!parse("Zzq > Something odd about the fund > 30-10-2026").deliverable_type);
+});
+
 test("an alias rule needs 3 different lines, all to one client", () => {
     const lines = ["Zork > a one", "Zork > b two", "Zork > c three"].map(l => item(l));
     assert.strictEqual(learned.buildRules(lines.slice(0, 2)).filter(r => r.kind === "alias").length, 0);

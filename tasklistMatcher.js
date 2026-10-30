@@ -38,7 +38,8 @@ const {
     toTokens,
     words,
     stem,
-    fuzzyEq
+    fuzzyEq,
+    dropTrailingStamps
 } = require("./textUtils");
 
 
@@ -143,7 +144,7 @@ const SEGMENT_TYPES = [
     [/^(emailers?|mailers?)$/, "Emailers"],
     [/^long videos?$/, "Long Video"],
     [/^(ppts?|pptx|presentations?|decks?)$/, "Presentation (PPT) - Per Slide"],
-    [/^(web ?based data|web data|web research|data research and analysis \(?web\)?)$/, "Data Research and Analysis (Web)"],
+    [/^(web ?based (data|research)|web (data|research)|data research and analysis \(?web\)?)$/, "Data Research and Analysis (Web)"],
     [/^(smi data|smi research|data research and analysis \(?smi\)?)$/, "Data Research and Analysis (SMI)"],
     // "Campaign ideation" is a deliverable type; the plain form is the one with keywords
     [/^campaign ideation( plan)?$/, "Campaign Ideation Plan (Includes Keywords)"]
@@ -239,12 +240,28 @@ function loadLexicon(file) {
 // start-up from lexicon.json and again whenever it is rebuilt from the live
 // PMT data, so the matcher never works from a stale snapshot for long.
 // What the manager's earlier decisions taught (see learned.js)
-let LEARNED = { exact: new Map(), leadClient: new Map() };
+let LEARNED = { exact: new Map(), leadClient: new Map(), closerType: new Map() };
 
 function useLearned(lookups) {
     LEARNED = lookups && lookups.exact && lookups.leadClient
-        ? lookups
-        : { exact: new Map(), leadClient: new Map() };
+        ? { closerType: new Map(), ...lookups }
+        : { exact: new Map(), leadClient: new Map(), closerType: new Map() };
+}
+
+// A line whose closing word people have turned into the same type on several
+// different lines ("... > Review" -> Team Reviews and Feedback). Only fills a
+// type nothing else found: the matched deliverable's own type, the closing
+// word ("... > Carousel") and an exact learned line all come first.
+function applyLearnedCloser(result, rawLine) {
+    if (!result || result.deliverable_type) return result;
+    const type = LEARNED.closerType.get(learned.closerKey(rawLine));
+    if (!type) return result;
+
+    result.deliverable_type = type;
+    result.type_source = "learned";
+    result.learned_type = true;
+    result.type_candidates = [];
+    return result;
 }
 
 // A line the manager already resolved, worded the same: use their answer.
@@ -293,7 +310,7 @@ function applyLearnedExact(result, rawLine) {
 
 function resolveLine(rawLine) {
     const result = resolveBase(rawLine);
-    return result ? applyLearnedExact(result, rawLine) : result;
+    return result ? applyLearnedCloser(applyLearnedExact(result, rawLine), rawLine) : result;
 }
 
 function useLexicon(lex) {
@@ -1056,10 +1073,17 @@ function resolveBase(rawLine) {
     // the closing part names the kind of work ("... > Carousel"); a matching
     // deliverable in PMT, when there is one, decides the type instead (below)
     const closingPart = arrowed
-        ? text.split(ARROW_SPLIT_RE).pop()
+        ? dropTrailingStamps(text.split(ARROW_SPLIT_RE)).pop()
         : text.split(/\s+[-\u2013\u2014]\s+|\s*[\u2013\u2014]\s*/).filter(Boolean).slice(1).pop();
 
-    const lineType = typeOfPart(closingPart);
+    // "<title>_Reel": an underscore before the closing word also marks the type
+    // (read from the raw line: underscores are already spaces in `text`)
+    const underscored = String(rawLine || "")
+        .replace(/\([^)]*\)?/g, " ")
+        .trim()
+        .match(/_\s*([A-Za-z][A-Za-z ]*)$/);
+
+    const lineType = typeOfPart(closingPart) || (underscored ? typeOfPart(underscored[1]) : null);
 
 
     // ---- client from the start of the line -----------------
