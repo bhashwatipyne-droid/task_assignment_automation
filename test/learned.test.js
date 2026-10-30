@@ -121,6 +121,16 @@ test("a type is read past a trailing date, after an underscore, and from 'web ba
     assert.ok(!parse("Zzq > Something odd about the fund > 30-10-2026").deliverable_type);
 });
 
+test("IG always means One Pager / Infographic, wherever it sits in the closing part", () => {
+    matcher.useLexicon(base);
+    const IG = "One Pager / Infographic";
+    assert.strictEqual(parse("Zzq > Something odd about the fund > IG").deliverable_type, IG);
+    assert.strictEqual(parse("Zzq > Something odd about the fund > SIF tool Kit Seties IG 3 (first cut today end of the day)").deliverable_type, IG);
+    assert.strictEqual(parse("Zzq > Something odd about the fund > Meet the crew IG changes (today first half)").deliverable_type, IG);
+    // only the word IG: other words that contain the letters are not it
+    assert.ok(!parse("Zzq > Something odd about the fund > Digital Gold").deliverable_type);
+});
+
 test("an alias rule needs 3 different lines, all to one client", () => {
     const lines = ["Zork > a one", "Zork > b two", "Zork > c three"].map(l => item(l));
     assert.strictEqual(learned.buildRules(lines.slice(0, 2)).filter(r => r.kind === "alias").length, 0);

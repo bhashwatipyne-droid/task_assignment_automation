@@ -170,6 +170,10 @@ function typeOfPart(part) {
         if (re.test(plain)) return { type, candidates: [] };
     }
 
+    // "IG" always means infographic / one pager here, wherever it sits in the
+    // closing part ("... > IG", "SIF tool Kit IG 3", "Meet the crew IG changes")
+    if (/\big\b/.test(plain)) return { type: "One Pager / Infographic", candidates: [] };
+
     if (AMBIGUOUS_SEGMENT_TYPES.test(plain)) {
 
         return DEFAULT_DATA_RESEARCH_TYPE
