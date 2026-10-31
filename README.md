@@ -1,7 +1,13 @@
 # WhatsApp Task Assignment Listener — Architecture, Data Model, Idempotency, and Edge-Case Review
 
 
-> **Code snapshot update — 2026-10-16**
+> **Latest update — 2026-10-31**
+>
+> This document was last fully reviewed against snapshot `cdaaded` (2026-10-16). The code has moved on since: a decision-learning layer, deliverable-type reading, project recency, "Team" lines, richer call parsing, and a safer reconnect policy were added (commits `093af0e` … `284ec70`, 2026-10-26 to 2026-10-30). Those changes are summarised in **[17. Changes since the 2026-10-16 snapshot](#17-changes-since-the-2026-10-16-snapshot)**, and the module table (§2), collection map (§5.1), task fields (§5.4), reconnect behavior (§8.4), and configuration reference (§14) have been updated to match. Sections 3–4 and 6–13 describe the 2026-10-16 behavior unless §17 says otherwise.
+>
+> **Verification:** with dependencies installed (`npm install`), `node --test "test/*.test.js"` runs **158 tests, all passing** (checked 2026-10-31 against HEAD `284ec70`). This is a unit-test result using the fake database; it is not a live WhatsApp or production MongoDB test.
+
+> **Earlier snapshot note — 2026-10-16**
 >
 > This document has been revised against the uploaded repository snapshot `cdaaded015def4df5d84846b733052ffb7818ae6` (the archive root identifies this commit). It now reflects the group-ID allowlist, configurable filesystem outbox, atomic temp-file writes, durable delete/edit withdrawal events, source-ID atomic updates, poison-payload quarantine, connection-state health endpoints, reconnect backoff/single-socket guard, `SIGTERM` handling, and expanded message-text extraction.
 >
@@ -91,6 +97,10 @@ flowchart TD
 | `teamRoster.json` | Bundled known-name list used by the parser | Recognition is not the same as successful PMT user resolution. |
 | `clientAliases.js` | Client alias/family knowledge used by matching | Alias coverage directly affects match quality. |
 | `lexicon.json` | Startup fallback lexical snapshot | Live Mongo data is intended to replace it when available. |
+| `learned.js` | Builds rules from managers' decisions (resolved held lines, Planning card edits, Work Sheet row edits) and stores them in `nlp_learned_rules` | Never changes the matcher's own scoring; see §17.2. |
+| `reconnectPolicy.js` | Decides how long to wait before reconnecting to WhatsApp, with a long wait when another copy took the login (status 440) | Pure functions; used by `index.js`. See §8.4 and §17.5. |
+| `messageText.js` | Extracts text from WhatsApp message shapes (plain, extended, captions, wrapped messages) | Used by `index.js`; has its own tests. |
+| `groupGate.js` | Group allowlist check (`ALLOWED_GROUP_JIDS`, else `ALLOWED_GROUP_NAMES`) | Used by `index.js`. |
 | `index1.js` | Older listener variant that forwards to n8n | Not the configured `package.json` main entry point. |
 | `index-terminal.js` | Terminal-only variant with different extraction/reconnect behavior | Not the configured `package.json` main entry point; do not assume its handling exists in production. |
 
@@ -149,7 +159,7 @@ For each message:
 - `imageMessage.caption`
 - `videoMessage.caption`
 
-Other message shapes are ignored as “non-text message.” In particular, this code does not recursively unwrap `ephemeralMessage`, `viewOnceMessage`, `documentWithCaptionMessage`, or button/list replies, and it does not read document captions. `index-terminal.js` has a more defensive recursive extractor for several of those shapes, but that code is not used by `package.json`’s main entry point. This is a concrete implementation difference, not just a theoretical edge case.
+> **Correction (2026-10-31):** the list above is out of date. `index.js` now calls `extractMessageText()` from `messageText.js` (see §3.2 step 7), which also unwraps the disappearing/view-once/document-caption wrappers covered by `test/messageText.test.js`. Shapes it does not recognise are still skipped as “non-text message.” `index-terminal.js` remains a separate terminal-only variant that is not the `package.json` entry point.
 
 ### 3.4 Tasklist detection
 
@@ -297,7 +307,7 @@ The core `rank()` function calculates weighted recall and precision for each pro
 | Client tie margin | `0.05` | Close evidence for multiple clients triggers review. |
 | Project ambiguity margin | `0.15` | Close projects usually trigger review unless a special tie-break rule cleanly distinguishes them. |
 | Deliverable ambiguity margin | `0.10` | Close top deliverables trigger review in `mongoStore.js`. |
-| Project recency prior | up to `0.04` added for ranking | A more recently updated project gets a small ranking nudge; raw score remains separately stored. |
+| Project recency prior | up to `0.10`, half-life 180 days; projects idle for 18 months get `-0.08` | Updated 2026-10-26. Recency now comes from the project's and its deliverables' planned dates, not the import-time `created_at`/`updated_at`. Projects with no usable date stay neutral. Raw score remains separately stored. See §17.3. |
 | Exact unique deliverable escape hatch | raw ≥ `0.95`, recall ≥ `0.999`, precision ≥ `0.9`, at least 3 tokens, wording unique | Can infer client/project from a distinctive full deliverable name. |
 
 The scores are **ranking features, not calibrated confidence probabilities**. A score of `0.90` should not be communicated as “90% probability of correctness.”
@@ -336,6 +346,7 @@ The listener’s persistence contract centers on `tasklist_items`. There are sup
 | `tasklist_items` | One logical assigned work item per expanded task line/copy/person | Yes | **Yes, according to code comments** |
 | `nlp_match_logs` | One NLP decision log row per parsed line/sequence/message | Yes | No; observability/audit |
 | `tasks` | Legacy flat task rows from older n8n integration | Only when `WRITE_TASKS=true` | Comments say PMT no longer reads it |
+| `nlp_learned_rules` | Rules learned from managers' decisions (`exact`, `closer`, `alias`); a manager can switch one off with `disabled: true` | Yes, by `learned.js` (rebuilt from resolved `tasklist_items` and edited Work Sheet rows) | Read by the listener; PMT shows them under "Learned from your decisions" and changes only `disabled` |
 | `wa_auth` | Baileys credentials and key material | Yes, by `waAuthStore.js` | Not task data; authentication secrets |
 | `users` | PMT users used to resolve assignees/managers | Read-only | Existing PMT collection |
 | `clients`, `projects`, `deliverables` | PMT master data used by matching and live validation | Read-only | Existing PMT collections |
@@ -412,6 +423,16 @@ This is the most important schema. One document represents **one assignee’s on
 | `assigned_by_user_id` | PMT user ID mapped from the sender using `MANAGER_MAP`, otherwise null |
 | `assigned_by_name` | Mapped sender name, otherwise e.g. `Content team manager` |
 | `assigned_by_role` | Role/department description or fallback label |
+
+### Fields added after 2026-10-16
+
+| Field | Meaning |
+|---|---|
+| `collaborator_user_ids` | Present only on a "Team" line: the other assignable people in the posting manager's department. The poster is the owner (`assignee_user_id`). See §17.4. |
+| `deliverable_type` | PMT deliverable type for the Work Sheet row: from the matched deliverable (`type_source: "database"`) or from the closing word of the line (`"line"`). Null when neither says. |
+| `deliverable_type_corrected` | True when the type came from what a manager chose for this wording (a learned rule), or from a closing "changes"/"review". PMT then keeps this type over the matched deliverable's own type. |
+| `type_source` | Where `deliverable_type` came from. |
+| `type_candidates` | Types the line could mean when it is ambiguous (for example the two "Data Research and Analysis" types). |
 
 ### Client/project/deliverable fields
 
@@ -730,7 +751,7 @@ The `failed/` directory is a quarantine/dead-letter *mechanism*, but not yet a c
 - Mongo/outbox retry interval: the store's periodic retry/flush timer (currently five minutes by default in this code path).
 - User cache TTL: 10 minutes.
 - Lexicon refresh threshold: five minutes by default.
-- WhatsApp reconnect delay: exponential backoff starting at 3 seconds and capped at 60 seconds; one reconnect timer is scheduled at a time. Session-conflict handling enforces a minimum wait of 30 seconds.
+- WhatsApp reconnect delay (`reconnectPolicy.js`): exponential backoff starting at 3 seconds and capped at 60 seconds; one reconnect timer is scheduled at a time. If the connection was closed because another copy took the login (status 440, "connection replaced"), the listener does **not** take it back after 30 seconds as it did before. It waits 5 minutes, doubling after each repeat up to 30 minutes, so a deploy's old copy and new copy stop trading the login. A connection that stayed open for more than 2 minutes resets the streak. See §17.5.
 - `waStarting`, `reconnectTimer`, and `shuttingDown` guard the reconnect lifecycle. This is safer than the earlier fixed-delay reconnect path, but does not prove the remote WhatsApp session will always recover without operator intervention.
 - `SIGTERM` is handled for deployment shutdown.
 - `/` reports actual component state while remaining an HTTP liveness endpoint; `/ready` is the stricter readiness check (WhatsApp open and Mongo connected). A 503 from `/ready` means the process may be alive but is not ready to handle normal work.
@@ -1074,6 +1095,10 @@ No. The main matching/store tests use `FakeDb`, an in-memory adapter. It does no
 | `MONGODB_URI` | Connection URI; required for Mongo task persistence and Mongo auth storage |
 | `MONGODB_DB` | Database name; defaults to `pmt` |
 | `ALLOWED_GROUP_NAMES` | Comma-separated normalized group subjects; `.env.example` lists Content Team, Design Team, Animation Team |
+| `ALLOWED_GROUP_JIDS` | Comma-separated group IDs. When set, only these IDs are accepted and the names are ignored, so renaming a group does not break it. The listener logs "Ignoring unauthorized group: <name> (<id>)" to help find IDs. |
+| `OUTBOX_DIR` | Folder for queued payloads while MongoDB is down; defaults to `./outbox`, which Render wipes on every deploy. Point it at a persistent disk to survive a redeploy. |
+| `OUTBOX_MAX_ATTEMPTS` | Non-connectivity failures before a queued file moves to `outbox/failed/`; default 10 |
+| `LEARNED_REFRESH_MS` | How often learned rules are reloaded from `nlp_learned_rules`; default 2 minutes, `0` or less turns the timer off |
 | `MANAGER_JIDS` | Authorized manager phone/JID numbers; final ten digits compared |
 | `MANAGER_MAP` | Maps a phone number to a PMT full name for `assigned_by_*` fields |
 | `ASSIGNEES` | Optional parser-side assignee names, combined with PMT users and roster |
@@ -1102,7 +1127,11 @@ No. The main matching/store tests use `FakeDb`, an in-memory adapter. It does no
 
 ### Test run
 
-Ran `node --test "test/*.test.js"` from the repository directory.
+**Latest run (2026-10-31, HEAD `284ec70`):** after `npm install`, `node --test "test/*.test.js"` ran **158 tests: 158 passed, 0 failed, 0 skipped.** New suites since the snapshot cover arrow lines (`arrowLines.test.js`), family projects such as "TFP" (`familyProject.test.js`), learned rules (`learned.test.js`), deliverable type and recency (`typeAndRecency.test.js`), and the reconnect policy (`reconnectPolicy.test.js`).
+
+The notes below describe the earlier 2026-10-16 run and are kept for history.
+
+**Run on the 2026-10-16 snapshot:** ran `node --test "test/*.test.js"` from the repository directory.
 
 - **80 tests passed.**
 - **3 tests failed to load/run because dependencies were not installed in the supplied runtime**: `express` for QR-page tests and `@whiskeysockets/baileys` for Mongo auth-store tests.
@@ -1150,3 +1179,52 @@ The most important implementation risks are not the NLP score formula itself; th
 If the team is preparing for a founder-level technical review, the core principle to state is:
 
 > **A source message is parsed into candidate work items; safe candidates are queued, unsafe candidates are held, and a deterministic daily key makes retries/reposts converge on one logical task. Source IDs let deletion/edit logic reason about whether that task is still asserted by another message. The guarantee is strongest within a healthy single running instance and a MongoDB deployment with its expected indexes; filesystem durability, cross-event retries, concurrency, and re-evaluation policy are the areas to harden.**
+
+---
+
+## 17. Changes since the 2026-10-16 snapshot
+
+Everything here was added between commits `54d362d` (2026-10-16) and `284ec70` (2026-10-30). Each item says what the code does now; where an earlier section of this document describes the old behavior, the earlier section is superseded.
+
+### 17.1 Deliverable type (the PMT "type" of a task)
+
+The listener now works out which PMT deliverable type a line asks for, so the Work Sheet row can be created with the right type even when no deliverable of that name exists yet. The result is stored in `deliverable_type`, `type_source`, and `type_candidates` (§5.4).
+
+- **Closing word of an arrow line.** In `TFP Premium > Diwali Campaign > <article title> > Carousel`, the last part names the kind of work. Only an exact type phrase counts, so a title that merely contains "reel" is not read as a type. A title that *ends* in the type word ("... reel", or `<title>_Reel`) is read as that type, with the earlier words kept as the name.
+- **Fixed readings:** "AV" (animated video) is always Reel / Short Video; a plain "video" is Long Video; "IG" anywhere in the closing part means One Pager / Infographic; "Data plug in" is Data Updation.
+- **"Changes" and "review" win.** A closing part ending in "changes" is the type Changes; one ending in "review(s)" is Team Reviews and Feedback, whatever comes before the word and even with a status word after it ("Reel changes Delayed"). This beats the matched deliverable's own type, and the item is marked `deliverable_type_corrected`.
+- **Data Research and Analysis** exists twice in PMT, (Web) and (SMI), and the line rarely says which. SMI is the default (`DEFAULT_DATA_RESEARCH_TYPE` in `tasklistMatcher.js`); set it to `null` to leave the type empty and list both in `type_candidates`. "Web Based Data" selects Web.
+- **Types settle close calls.** When two projects or two deliverables score closely and the line asks for a type ("AV", "ppt"), the candidate that actually has that type goes first. This only breaks ties; it never overrides a clear score gap.
+- **Arrow lines.** `>`, `->`, `›`, `»` and `→` separate the parts of a line the way a dash does. A number ending the middle part is part of the article title, so quantity expansion is skipped on arrow lines. Trailing date/time stamps ("... > Reel > 30-10-2026 | 6:00 pm") are dropped before the closing part is read.
+
+### 17.2 Learning from managers' decisions (`learned.js`)
+
+When a manager resolves a held line, edits a Planning card, or changes a Work Sheet row that PMT created from a WhatsApp task, that decision can become a rule in `nlp_learned_rules`. Three kinds exist:
+
+| Rule | When it applies | Threshold |
+|---|---|---|
+| `exact` | The same line, worded the same (timing note in brackets ignored), goes straight to the project, deliverable and type the managers chose | A clear winner: strictly more votes than any other answer and at least 75% of all votes (`MIN_AGREEMENT`). A tie or a real split makes no rule. If the project is agreed but the deliverable is split, the rule sends the line to the project and leaves the deliverable open. |
+| `closer` | The closing word of an arrow line ("Review", "Changes") fills the deliverable type of a line whose type nothing else could read | Typed to the same type on at least 3 different lines and never to another type (`MIN_CLOSER_LINES`) |
+| `alias` | A first word ("TFP", "BBNPP") settles a client tie | Resolved to the same client at least 3 times and never to another (`MIN_ALIAS_LINES`) |
+
+Learned rules never change the matcher's scoring; they only fill gaps or settle ties, and a type a manager chose beats the matcher's reading of the line. A manager can switch any rule off in PMT (`disabled: true`). Rules are reloaded every 2 minutes (`LEARNED_REFRESH_MS`) and on each lexicon refresh, so a decision shows up in PMT's "Learned from your decisions" list without waiting for the next tasklist. Rules are rebuilt from the underlying decisions, so the source of truth is `tasklist_items` (items with `resolved_by` set) and edited Work Sheet rows, not the rules collection.
+
+### 17.3 Matching changes
+
+- **Project recency.** `lexiconBuilder.js` now records an `act` timestamp per project, the latest planned start/end date of the project or any of its deliverables. A project's ranking bonus is up to 0.10, halving every 180 days; a project with no activity for 18 months is pushed down by 0.08, so a 2019 project cannot win a close call against this year's. Import-time `created_at`/`updated_at` are no longer used for this.
+- **Family projects ("TFP > Brighter Diwali Reel").** TFP is a family of monthly projects (TFP Oct-26, TFP May-26, ...). When a line starts with the family word, the rest of the line is the deliverable and the deliverable decides the month. The pick must be clear: close candidates are compared by how many distinctive words they explain, and candidates in different projects with comparable evidence are held for a person rather than guessed.
+- **Lead-word client tie-break.** If two clients tie but the line opens with a word only one client's projects carry ("BBNPP" for Baroda BNP Paribas), that word decides.
+- **"TFP > deliverable" lines pick the month from the deliverable** (see above), and "Campaign ideation" stays a deliverable name.
+
+### 17.4 Tasklist parsing and "Team" lines
+
+- **Calls section.** Besides "Calls for today/tomorrow" and "Meetings for today", an "Interview:" header now starts the calls section. Each call is stored with `kind` (`call`, `meeting` or `interview`). Call parts can be separated by dashes or by arrows, and the closing part can name several people (`Ratnesh | Vanshika`, `Vanshika & Krupali`, "and", "/", "+", ","). Every name must be someone known, or the whole closing part stays in the topic. `owner` holds the names joined with ` | ` for older readers and `owners` holds the list.
+- **"Team" lines.** A line under a "Team" heading names nobody. If the poster is known (`MANAGER_MAP`) and belongs to that team's department, the **poster owns the task and everyone else in the department becomes a collaborator** (`collaborator_user_ids`); PMT tags them on the owner's Work Sheet row once the task is accepted. If the poster is unknown, the line is held with the reason "No one is named: the line is under a "Team" heading. Choose who it is for", and a manager picks the owner in PMT.
+
+### 17.5 Reconnect behavior after a deploy
+
+A Render deploy starts the new listener while the old one is still running. Both use the same WhatsApp login, so each connect closed the other with status 440, and the old 30-second wait let the two take the login from each other until the old copy was stopped (fixed in `2c048e7`). `reconnectPolicy.js` now makes a copy that was replaced wait 5 minutes (doubling up to 30 minutes) before it reconnects; the deploy stops the old copy well before that, so the new copy keeps the login. If someone leaves another copy running on purpose, the log says so and the service takes the login back on its own once that copy is stopped. Other disconnects still use the 3 to 60 second backoff.
+
+### 17.6 Still true from the earlier review
+
+The P0/P1/P2 items in §12 are unchanged by these commits: the outbox is still a filesystem spool (durable across a redeploy only when `OUTBOX_DIR` points at a persistent disk), source-ID updates are still read-modify-write, and a replay of a same-team waiting item still does not re-evaluate its match. Treat §12 as the current hardening list.
